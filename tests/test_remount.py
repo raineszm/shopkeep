@@ -12,7 +12,7 @@ runner = CliRunner()
 def test_remount_command_remounts_a_specified_plug(
     tmp_path: Path, monkeypatch
 ) -> None:
-    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
     calls: list[tuple[list[str], bool]] = []
 
     def record_run(command: list[str], *, check: bool) -> None:
@@ -32,7 +32,15 @@ def test_remount_command_remounts_a_specified_plug(
         ],
     )
 
-    source = tmp_path / "Work" / "opencode" / "opencode-config"
+    source = (
+        tmp_path
+        / "data"
+        / "shopkeep"
+        / "mounts"
+        / "Work"
+        / "opencode"
+        / "opencode-config"
+    )
     assert result.exit_code == 0
     assert result.stdout == f"remount hotsos/opencode:opencode-config {source}\n"
     assert source.is_dir()
@@ -52,7 +60,7 @@ def test_remount_command_remounts_a_specified_plug(
 def test_remount_command_remounts_all_known_sdk_plugs(
     tmp_path: Path, monkeypatch
 ) -> None:
-    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
     calls: list[list[str]] = []
 
     def record_run(command: list[str], *, check: bool) -> None:
@@ -63,8 +71,24 @@ def test_remount_command_remounts_all_known_sdk_plugs(
 
     result = runner.invoke(app, ["remount", "hotsos", "--sdk", "opencode"])
 
-    config = tmp_path / "Work" / "opencode" / "opencode-config"
-    data = tmp_path / "Work" / "opencode" / "opencode-data"
+    config = (
+        tmp_path
+        / "data"
+        / "shopkeep"
+        / "mounts"
+        / "Work"
+        / "opencode"
+        / "opencode-config"
+    )
+    data = (
+        tmp_path
+        / "data"
+        / "shopkeep"
+        / "mounts"
+        / "Work"
+        / "opencode"
+        / "opencode-data"
+    )
     assert result.exit_code == 0
     assert config.is_dir()
     assert data.is_dir()
