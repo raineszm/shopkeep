@@ -46,6 +46,8 @@ def test_mount_source_rejects_path_traversal(tmp_path: Path) -> None:
     ("profile", "sdk", "plug"),
     [
         ("", "opencode", "opencode-config"),
+        ("Work", "", "opencode-config"),
+        ("Work", "opencode", ""),
         ("Work", "/tmp", "opencode-config"),
         ("Work", "opencode", "."),
         ("Work", "..", "opencode-config"),
