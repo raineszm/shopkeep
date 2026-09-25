@@ -35,11 +35,7 @@ def remount(
             raise typer.Exit(code=2)
         for plug_name in plugs:
             source = (
-                user_data_path("shopkeep")
-                / "mounts"
-                / profile
-                / sdk_name
-                / plug_name
+                user_data_path("shopkeep") / "mounts" / profile / sdk_name / plug_name
             )
             source.mkdir(parents=True, exist_ok=True)
             typer.echo(f"remount {workshop}/{sdk_name}:{plug_name} {source}")

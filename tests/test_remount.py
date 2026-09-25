@@ -9,9 +9,7 @@ from shopkeep import app
 runner = CliRunner()
 
 
-def test_remount_command_remounts_a_specified_plug(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_remount_command_remounts_a_specified_plug(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
     calls: list[tuple[list[str], bool]] = []
 
