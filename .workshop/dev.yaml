@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Copyright 2026 Canonical Ltd.
+
+# Workshop definition combining the project's toolchain and agent tooling.
+
+name: dev
+base: ubuntu@26.04
+sdks:
+  - name: uv
+    channel: latest/stable
+  - name: opencode
+    channel: latest/stable
+  - name: skills
+    channel: latest/edge
+
+actions:
+  build: |
+    uv build
+  test: |
+    uv run pytest
