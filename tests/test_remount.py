@@ -6,6 +6,7 @@ import pytest
 from typer.testing import CliRunner
 
 from shopkeep import app
+from shopkeep.app import create_app
 from shopkeep.remount import (
     RemountOperation,
     execute_remount_operations,
@@ -16,6 +17,23 @@ from shopkeep.remount import (
 
 
 runner = CliRunner()
+
+
+def test_remount_command_uses_injected_executor(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    calls: list[tuple[RemountOperation, Path]] = []
+
+    def record_execution(operation: RemountOperation, source: Path) -> None:
+        calls.append((operation, source))
+
+    result = runner.invoke(
+        create_app(record_execution), ["remount", "hotsos", "--sdk", "skills"]
+    )
+
+    source = tmp_path / "data" / "shopkeep" / "mounts" / "Work" / "skills" / "skills"
+    assert result.exit_code == 0
+    assert result.stdout == f"remount hotsos/skills:skills {source}\n"
+    assert calls == [(RemountOperation("hotsos", "skills", "skills"), source)]
 
 
 def test_plan_remount_operations_expands_known_sdk_in_configured_order() -> None:
@@ -300,16 +318,15 @@ def test_remount_command_stops_when_workshop_remount_fails(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
-    calls: list[list[str]] = []
+    calls: list[tuple[RemountOperation, Path]] = []
 
-    def fail_run(command: list[str], *, check: bool) -> None:
-        assert check is True
-        calls.append(command)
-        raise subprocess.CalledProcessError(returncode=1, cmd=command)
+    def fail_execution(operation: RemountOperation, source: Path) -> None:
+        calls.append((operation, source))
+        raise subprocess.CalledProcessError(returncode=1, cmd=["workshop"])
 
-    monkeypatch.setattr(subprocess, "run", fail_run)
-
-    result = runner.invoke(app, ["remount", "hotsos", "--sdk", "opencode"])
+    result = runner.invoke(
+        create_app(fail_execution), ["remount", "hotsos", "--sdk", "opencode"]
+    )
 
     config = (
         tmp_path
@@ -330,9 +347,9 @@ def test_remount_command_stops_when_workshop_remount_fails(
         / "opencode-data"
     )
     assert result.exit_code == 1
-    assert isinstance(result.exception, subprocess.CalledProcessError)
+    assert result.stderr == "error: workshop remount failed\n"
     assert calls == [
-        ["workshop", "remount", "hotsos/opencode:opencode-config", str(config)]
+        (RemountOperation("hotsos", "opencode", "opencode-config"), config)
     ]
     assert config.is_dir()
     assert not data.exists()

@@ -1,8 +1,7 @@
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated
 from collections.abc import Callable
+import subprocess
 
 import typer
 from platformdirs import user_data_path
@@ -83,15 +82,10 @@ def run_workshop_remount(operation: RemountOperation, source: Path) -> None:
 
 
 def remount(
-    workshop: Annotated[str, typer.Argument(help="Workshop name")],
-    sdk: Annotated[
-        list[str],
-        typer.Option("--sdk", help="SDK name to remount; repeat for multiple SDKs"),
-    ],
-    profile: Annotated[
-        str,
-        typer.Option("--profile", help="Profile root directory"),
-    ] = "Work",
+    workshop: str,
+    sdk: list[str],
+    profile: str = "Work",
+    executor: Callable[[RemountOperation, Path], None] = run_workshop_remount,
 ) -> None:
     try:
 
@@ -99,7 +93,7 @@ def remount(
             typer.echo(
                 f"remount {operation.workshop}/{operation.sdk}:{operation.plug} {source}"
             )
-            run_workshop_remount(operation, source)
+            executor(operation, source)
 
         for spec in sdk:
             execute_remount_operations(
@@ -108,6 +102,9 @@ def remount(
                 profile,
                 display_and_run,
             )
+    except subprocess.CalledProcessError as error:
+        typer.echo("error: workshop remount failed", err=True)
+        raise typer.Exit(code=1) from error
     except ValueError as error:
         typer.echo(f"error: {error}", err=True)
         raise typer.Exit(code=2) from error
