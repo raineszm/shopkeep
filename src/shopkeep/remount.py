@@ -7,10 +7,30 @@ import typer
 from platformdirs import user_data_path
 
 
-SDK_PLUGS = {
-    "opencode": ["opencode-config", "opencode-data"],
-    "skills": ["skills"],
-}
+@dataclass(frozen=True)
+class SDKKnowledge:
+    plugs_by_sdk: dict[str, list[str]]
+
+    def resolve(self, spec: str) -> tuple[str, list[str]]:
+        sdk_name, separator, plug = spec.partition(":")
+        if separator:
+            return sdk_name, [plug]
+        plugs = self.plugs_by_sdk.get(sdk_name)
+        if plugs:
+            return sdk_name, list(plugs)
+        known_sdks = ", ".join(sorted(self.plugs_by_sdk))
+        raise ValueError(
+            f"unknown plugs for SDK '{sdk_name}'; known SDKs: {known_sdks} "
+            "(or pass sdk:plug)"
+        )
+
+
+SDK_KNOWLEDGE = SDKKnowledge(
+    {
+        "opencode": ["opencode-config", "opencode-data"],
+        "skills": ["skills"],
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -21,17 +41,7 @@ class RemountOperation:
 
 
 def resolve_sdk_plugs(spec: str) -> tuple[str, list[str]]:
-    sdk_name, separator, plug = spec.partition(":")
-    if separator:
-        return sdk_name, [plug]
-    plugs = SDK_PLUGS.get(sdk_name)
-    if plugs:
-        return sdk_name, plugs
-    known_sdks = ", ".join(sorted(SDK_PLUGS))
-    raise ValueError(
-        f"unknown plugs for SDK '{sdk_name}'; known SDKs: {known_sdks} "
-        "(or pass sdk:plug)"
-    )
+    return SDK_KNOWLEDGE.resolve(spec)
 
 
 def plan_remount_operations(
