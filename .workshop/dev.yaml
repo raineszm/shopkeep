@@ -17,4 +17,4 @@ actions:
   build: |
     uv build
   test: |
-    uv run pytest
+    uv run pytest --cov=shopkeep --cov-report=term-missing
