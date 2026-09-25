@@ -6,9 +6,109 @@ import pytest
 from typer.testing import CliRunner
 
 from shopkeep import app
+from shopkeep.remount import (
+    RemountOperation,
+    execute_remount_operations,
+    mount_source,
+    plan_remount_operations,
+    resolve_sdk_plugs,
+)
 
 
 runner = CliRunner()
+
+
+def test_plan_remount_operations_expands_known_sdk_in_configured_order() -> None:
+    assert plan_remount_operations("hotsos", ["opencode"]) == [
+        RemountOperation("hotsos", "opencode", "opencode-config"),
+        RemountOperation("hotsos", "opencode", "opencode-data"),
+    ]
+
+
+def test_resolve_sdk_plugs_preserves_explicit_custom_plug() -> None:
+    assert resolve_sdk_plugs("custom-sdk:cache") == ("custom-sdk", ["cache"])
+
+
+def test_resolve_sdk_plugs_describes_unknown_sdk() -> None:
+    with pytest.raises(
+        ValueError,
+        match="unknown plugs for SDK 'unknown'; known SDKs: opencode, skills",
+    ):
+        resolve_sdk_plugs("unknown")
+
+
+def test_mount_source_rejects_path_traversal(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="must not contain path separators"):
+        mount_source(tmp_path, "Work", "../opencode", "opencode-config")
+
+
+@pytest.mark.parametrize(
+    ("profile", "sdk", "plug"),
+    [
+        ("", "opencode", "opencode-config"),
+        ("Work", "/tmp", "opencode-config"),
+        ("Work", "opencode", "."),
+        ("Work", "..", "opencode-config"),
+    ],
+)
+def test_mount_source_rejects_invalid_components(
+    tmp_path: Path, profile: str, sdk: str, plug: str
+) -> None:
+    with pytest.raises(ValueError):
+        mount_source(tmp_path, profile, sdk, plug)
+
+
+def test_execute_remount_operations_stops_after_executor_failure(
+    tmp_path: Path,
+) -> None:
+    operations = plan_remount_operations("hotsos", ["opencode"])
+    calls: list[tuple[RemountOperation, Path]] = []
+
+    def fail_after_first(operation: RemountOperation, source: Path) -> None:
+        calls.append((operation, source))
+        raise subprocess.CalledProcessError(1, ["workshop"])
+
+    with pytest.raises(subprocess.CalledProcessError):
+        execute_remount_operations(operations, tmp_path, "Work", fail_after_first)
+
+    assert calls == [
+        (operations[0], tmp_path / "mounts" / "Work" / "opencode" / "opencode-config")
+    ]
+
+
+def test_execute_remount_operations_uses_planned_order(tmp_path: Path) -> None:
+    operations = plan_remount_operations("hotsos", ["skills", "opencode:opencode-data"])
+    calls: list[tuple[RemountOperation, Path]] = []
+
+    def record(operation: RemountOperation, source: Path) -> None:
+        calls.append((operation, source))
+
+    execute_remount_operations(operations, tmp_path, "Work", record)
+
+    assert calls == [
+        (operations[0], tmp_path / "mounts" / "Work" / "skills" / "skills"),
+        (
+            operations[1],
+            tmp_path / "mounts" / "Work" / "opencode" / "opencode-data",
+        ),
+    ]
+
+
+def test_remount_command_rejects_traversing_profile(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    result = runner.invoke(
+        app, ["remount", "hotsos", "--sdk", "skills", "--profile", "../outside"]
+    )
+
+    assert result.exit_code == 2
+    assert (
+        result.stderr
+        == "error: profile, SDK, and plug must not contain path separators\n"
+    )
+    assert not (tmp_path / "outside").exists()
 
 
 @pytest.fixture
@@ -234,6 +334,26 @@ def test_remount_command_stops_when_workshop_remount_fails(
     ]
     assert config.is_dir()
     assert not data.exists()
+
+
+def test_remount_command_executes_prior_sdk_before_rejecting_later_unknown_sdk(
+    tmp_path: Path, monkeypatch, recorded_calls: list[list[str]]
+) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    result = runner.invoke(
+        app, ["remount", "hotsos", "--sdk", "skills", "--sdk", "unknown"]
+    )
+
+    skills = tmp_path / "data" / "shopkeep" / "mounts" / "Work" / "skills" / "skills"
+    assert result.exit_code == 2
+    assert recorded_calls == [
+        ["workshop", "remount", "hotsos/skills:skills", str(skills)]
+    ]
+    assert result.stderr == (
+        "error: unknown plugs for SDK 'unknown'; known SDKs: opencode, skills "
+        "(or pass sdk:plug)\n"
+    )
 
 
 def test_cli_help_lists_remount_command() -> None:
