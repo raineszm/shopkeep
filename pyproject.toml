@@ -28,6 +28,9 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
+markers = [
+    "integration: exercises a real Workshop; skipped unless --run-integration is passed",
+]
 
 [tool.coverage.run]
 branch = true
