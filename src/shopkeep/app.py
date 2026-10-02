@@ -36,13 +36,13 @@ def create_app(
     def setup_command(
         workshop: Annotated[str, typer.Option("--workshop", help="Workshop name")],
         source: Annotated[
-            Path,
+            Path | None,
             typer.Option("--from", help="Workshop definition to copy"),
-        ],
+        ] = None,
         sdk: Annotated[
             list[str],
             typer.Option("--sdk", help="SDK name to add; repeat for multiple SDKs"),
-        ],
+        ] = [],
         no_remount: Annotated[
             bool,
             typer.Option("--no-remount", help="Do not remount SDK plugs after setup"),

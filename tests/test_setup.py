@@ -11,6 +11,21 @@ from shopkeep.setup import setup_definition
 runner = CliRunner()
 
 
+def test_setup_definition_uses_the_default_template_without_a_source(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / ".git" / "info").mkdir(parents=True)
+
+    setup_definition(tmp_path, "dev", None, [])
+
+    assert (tmp_path / ".workshop" / "dev.yaml").read_text(encoding="utf-8") == (
+        "name: dev\nbase: ubuntu@26.04\nsdks: []\n"
+    )
+    assert (tmp_path / ".git" / "info" / "exclude").read_text(encoding="utf-8") == (
+        ".workshop/dev.yaml\n.workshop.lock\n"
+    )
+
+
 def test_setup_definition_copies_adds_sdk_and_excludes_local_artifacts(
     tmp_path: Path,
 ) -> None:
@@ -163,6 +178,35 @@ def test_setup_command_remounts_requested_sdk_after_writing_definition(
     assert launches == ["dev"]
     assert calls == [RemountOperation("dev", "skills", "skills")]
     assert (tmp_path / ".workshop" / "dev.yaml").exists()
+
+
+def test_setup_command_uses_the_default_template_without_from(
+    tmp_path: Path, monkeypatch
+) -> None:
+    (tmp_path / ".git" / "info").mkdir(parents=True)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    calls: list[RemountOperation] = []
+    launches: list[str] = []
+
+    def record_remount(operation: RemountOperation, _: Path) -> None:
+        calls.append(operation)
+
+    def record_launch(workshop: str) -> None:
+        launches.append(workshop)
+
+    result = runner.invoke(
+        create_app(record_remount, record_launch),
+        ["setup", "--workshop", "dev", "--sdk", "skills"],
+    )
+
+    assert result.exit_code == 0
+    assert launches == ["dev"]
+    assert calls == [RemountOperation("dev", "skills", "skills")]
+    assert (tmp_path / ".workshop" / "dev.yaml").read_text(encoding="utf-8") == (
+        "name: dev\nbase: ubuntu@26.04\nsdks:\n  - name: skills\n"
+        "    channel: latest/edge\n"
+    )
 
 
 def test_setup_command_skips_remount_with_no_remount(

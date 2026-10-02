@@ -7,6 +7,7 @@ SDK_DECLARATIONS = {
     "opencode": {"channel": "latest/stable"},
     "skills": {"channel": "latest/edge"},
 }
+DEFAULT_DEFINITION = "base: ubuntu@26.04\nsdks: []\n"
 
 
 def run_workshop_launch(workshop: str) -> None:
@@ -14,14 +15,17 @@ def run_workshop_launch(workshop: str) -> None:
 
 
 def setup_definition(
-    project_root: Path, workshop: str, source: Path, sdk_names: list[str]
+    project_root: Path, workshop: str, source: Path | None, sdk_names: list[str]
 ) -> Path:
     validate_workshop_name(workshop)
     sdk_names = unique_sdk_names(sdk_names)
-    try:
-        definition = source.read_text(encoding="utf-8")
-    except OSError as error:
-        raise ValueError(f"cannot read source definition: {source}") from error
+    if source is None:
+        definition = DEFAULT_DEFINITION
+    else:
+        try:
+            definition = source.read_text(encoding="utf-8")
+        except OSError as error:
+            raise ValueError(f"cannot read source definition: {source}") from error
 
     unknown_sdks = [sdk for sdk in sdk_names if sdk not in SDK_DECLARATIONS]
     if unknown_sdks:
@@ -67,6 +71,10 @@ def set_workshop_name(definition: str, workshop: str) -> str:
 
 
 def add_missing_sdks(definition: str, sdk_names: list[str]) -> str:
+    if sdk_names:
+        definition = re.sub(
+            r"^sdks:[ \t]*\[\][ \t]*$", "sdks:", definition, flags=re.MULTILINE
+        )
     sdks_match = re.search(r"^sdks:\s*$", definition, flags=re.MULTILINE)
     content_start, insertion = sdk_section_bounds(definition, sdks_match)
     existing = {
