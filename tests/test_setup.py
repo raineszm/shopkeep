@@ -80,6 +80,49 @@ def test_setup_definition_rejects_an_existing_target(tmp_path: Path) -> None:
     assert target.read_text(encoding="utf-8") == "name: existing\n"
 
 
+def test_setup_definition_ignores_sdk_names_outside_the_sdks_section(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.yaml"
+    source.write_text(
+        "name: base\nsdks:\n  - name: uv\nactions:\n  task:\n    - name: opencode\n",
+        encoding="utf-8",
+    )
+    (tmp_path / ".git" / "info").mkdir(parents=True)
+
+    setup_definition(tmp_path, "dev", source, ["opencode"])
+
+    assert "  - name: opencode\n    channel: latest/stable\nactions:" in (
+        tmp_path / ".workshop" / "dev.yaml"
+    ).read_text(encoding="utf-8")
+
+
+def test_setup_definition_deduplicates_requested_sdks(tmp_path: Path) -> None:
+    source = tmp_path / "source.yaml"
+    source.write_text("name: base\n", encoding="utf-8")
+    (tmp_path / ".git" / "info").mkdir(parents=True)
+
+    setup_definition(tmp_path, "dev", source, ["skills", "skills"])
+
+    assert (tmp_path / ".workshop" / "dev.yaml").read_text(encoding="utf-8").count(
+        "  - name: skills\n"
+    ) == 1
+
+
+def test_setup_definition_uses_linked_worktree_exclude_file(tmp_path: Path) -> None:
+    source = tmp_path / "source.yaml"
+    source.write_text("name: base\n", encoding="utf-8")
+    git_dir = tmp_path / "git-common"
+    (git_dir / "info").mkdir(parents=True)
+    (tmp_path / ".git").write_text("gitdir: git-common\n", encoding="utf-8")
+
+    setup_definition(tmp_path, "dev", source, ["skills"])
+
+    assert (git_dir / "info" / "exclude").read_text(encoding="utf-8") == (
+        ".workshop/dev.yaml\n.workshop.lock\n"
+    )
+
+
 def test_setup_definition_rejects_a_traversing_workshop_name(tmp_path: Path) -> None:
     source = tmp_path / "source.yaml"
     source.write_text("name: base\n", encoding="utf-8")

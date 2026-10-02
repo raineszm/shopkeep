@@ -17,6 +17,7 @@ def setup_definition(
     project_root: Path, workshop: str, source: Path, sdk_names: list[str]
 ) -> Path:
     validate_workshop_name(workshop)
+    sdk_names = unique_sdk_names(sdk_names)
     try:
         definition = source.read_text(encoding="utf-8")
     except OSError as error:
@@ -38,6 +39,10 @@ def setup_definition(
     )
     add_local_excludes(project_root, [f".workshop/{workshop}.yaml", ".workshop.lock"])
     return target
+
+
+def unique_sdk_names(sdk_names: list[str]) -> list[str]:
+    return list(dict.fromkeys(sdk_names))
 
 
 def validate_workshop_name(workshop: str) -> None:
@@ -62,16 +67,17 @@ def set_workshop_name(definition: str, workshop: str) -> str:
 
 
 def add_missing_sdks(definition: str, sdk_names: list[str]) -> str:
+    sdks_match = re.search(r"^sdks:\s*$", definition, flags=re.MULTILINE)
+    content_start, insertion = sdk_section_bounds(definition, sdks_match)
     existing = {
         line.split(":", 1)[1].strip()
-        for line in definition.splitlines()
+        for line in definition[content_start:insertion].splitlines()
         if line.startswith("  - name:")
     }
     missing = [sdk for sdk in sdk_names if sdk not in existing]
     if not missing:
         return definition
 
-    sdks_match = re.search(r"^sdks:\s*$", definition, flags=re.MULTILINE)
     if not sdks_match:
         definition = f"{definition.rstrip()}\nsdks:\n"
     declarations = "".join(
@@ -81,6 +87,14 @@ def add_missing_sdks(definition: str, sdk_names: list[str]) -> str:
     if not sdks_match:
         return definition + declarations
 
+    return definition[:insertion] + declarations + definition[insertion:]
+
+
+def sdk_section_bounds(
+    definition: str, sdks_match: re.Match[str] | None
+) -> tuple[int, int]:
+    if not sdks_match:
+        return len(definition), len(definition)
     content_start = sdks_match.end()
     if definition[content_start : content_start + 1] == "\n":
         content_start += 1
@@ -88,11 +102,11 @@ def add_missing_sdks(definition: str, sdk_names: list[str]) -> str:
     insertion = (
         content_start + next_section.start() if next_section else len(definition)
     )
-    return definition[:insertion] + declarations + definition[insertion:]
+    return content_start, insertion
 
 
 def add_local_excludes(project_root: Path, entries: list[str]) -> None:
-    exclude = project_root / ".git" / "info" / "exclude"
+    exclude = git_exclude_path(project_root)
     existing = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
     missing = [entry for entry in entries if entry not in existing.splitlines()]
     if not missing:
@@ -102,3 +116,11 @@ def add_local_excludes(project_root: Path, entries: list[str]) -> None:
     exclude.write_text(
         existing + separator + "\n".join(missing) + "\n", encoding="utf-8"
     )
+
+
+def git_exclude_path(project_root: Path) -> Path:
+    git_path = project_root / ".git"
+    if git_path.is_dir():
+        return git_path / "info" / "exclude"
+    git_dir = git_path.read_text(encoding="utf-8").removeprefix("gitdir: ").strip()
+    return (git_path.parent / git_dir).resolve() / "info" / "exclude"

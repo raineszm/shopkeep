@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Annotated
 
 from .remount import RemountOperation, remount, run_workshop_remount
-from .setup import run_workshop_launch, setup_definition
+from .setup import run_workshop_launch, setup_definition, unique_sdk_names
 
 
 def create_app(
@@ -49,6 +49,7 @@ def create_app(
         ] = False,
     ) -> None:
         try:
+            sdk = unique_sdk_names(sdk)
             setup_definition(Path.cwd(), workshop, source, sdk)
             launcher(workshop)
             if not no_remount:
