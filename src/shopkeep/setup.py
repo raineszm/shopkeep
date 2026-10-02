@@ -1,4 +1,6 @@
 from pathlib import Path
+from dataclasses import dataclass
+import json
 import re
 import subprocess
 
@@ -10,15 +12,23 @@ SDK_DECLARATIONS = {
 DEFAULT_DEFINITION = "base: ubuntu@26.04\nsdks: []\n"
 
 
+@dataclass(frozen=True)
+class SDKSpec:
+    name: str
+    channel: str
+    managed: bool
+
+
 def run_workshop_launch(workshop: str) -> None:
     subprocess.run(["workshop", "launch", workshop], check=True)
 
 
 def setup_definition(
-    project_root: Path, workshop: str, source: Path | None, sdk_names: list[str]
+    project_root: Path, workshop: str, source: Path | None, sdk_specs: list[str]
 ) -> Path:
     validate_workshop_name(workshop)
-    sdk_names = unique_sdk_names(sdk_names)
+    sdk_specs = unique_sdk_names(sdk_specs)
+    sdk_declarations = [parse_sdk_spec(spec) for spec in sdk_specs]
     if source is None:
         definition = DEFAULT_DEFINITION
     else:
@@ -27,10 +37,6 @@ def setup_definition(
         except OSError as error:
             raise ValueError(f"cannot read source definition: {source}") from error
 
-    unknown_sdks = [sdk for sdk in sdk_names if sdk not in SDK_DECLARATIONS]
-    if unknown_sdks:
-        raise ValueError(f"unknown SDK: {unknown_sdks[0]}")
-
     target = project_root / ".workshop" / f"{workshop}.yaml"
     if target.exists():
         raise ValueError(
@@ -38,7 +44,7 @@ def setup_definition(
         )
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(
-        add_missing_sdks(set_workshop_name(definition, workshop), sdk_names),
+        add_missing_sdks(set_workshop_name(definition, workshop), sdk_declarations),
         encoding="utf-8",
     )
     add_local_excludes(project_root, [f".workshop/{workshop}.yaml", ".workshop.lock"])
@@ -47,6 +53,30 @@ def setup_definition(
 
 def unique_sdk_names(sdk_names: list[str]) -> list[str]:
     return list(dict.fromkeys(sdk_names))
+
+
+def parse_sdk_spec(spec: str) -> SDKSpec:
+    name, separator, channel = spec.partition("/")
+    if not name or name.isspace():
+        raise ValueError("SDK name must not be empty")
+    if separator:
+        if not channel or channel.isspace():
+            raise ValueError("SDK channel must not be empty")
+    known = SDK_DECLARATIONS.get(name)
+    if known:
+        return SDKSpec(name, known["channel"], True)
+    if separator:
+        return SDKSpec(name, channel, False)
+    raise ValueError(f"SDK channel is required for pass-through SDK: {name}")
+
+
+def managed_sdk_names(sdk_specs: list[str]) -> list[str]:
+    names: list[str] = []
+    for spec in sdk_specs:
+        sdk = parse_sdk_spec(spec)
+        if sdk.managed and sdk.name not in names:
+            names.append(sdk.name)
+    return names
 
 
 def validate_workshop_name(workshop: str) -> None:
@@ -70,8 +100,8 @@ def set_workshop_name(definition: str, workshop: str) -> str:
     return f"name: {workshop}\n{definition}"
 
 
-def add_missing_sdks(definition: str, sdk_names: list[str]) -> str:
-    if sdk_names:
+def add_missing_sdks(definition: str, sdk_declarations: list[SDKSpec]) -> str:
+    if sdk_declarations:
         definition = re.sub(
             r"^sdks:[ \t]*\[\][ \t]*$", "sdks:", definition, flags=re.MULTILINE
         )
@@ -82,20 +112,30 @@ def add_missing_sdks(definition: str, sdk_names: list[str]) -> str:
         for line in definition[content_start:insertion].splitlines()
         if line.startswith("  - name:")
     }
-    missing = [sdk for sdk in sdk_names if sdk not in existing]
+    missing = [
+        declaration
+        for declaration in sdk_declarations
+        if declaration.name not in existing
+    ]
     if not missing:
         return definition
 
     if not sdks_match:
         definition = f"{definition.rstrip()}\nsdks:\n"
     declarations = "".join(
-        f"  - name: {sdk}\n    channel: {SDK_DECLARATIONS[sdk]['channel']}\n"
+        f"  - name: {yaml_scalar(sdk.name)}\n    channel: {yaml_scalar(sdk.channel)}\n"
         for sdk in missing
     )
     if not sdks_match:
         return definition + declarations
 
     return definition[:insertion] + declarations + definition[insertion:]
+
+
+def yaml_scalar(value: str) -> str:
+    if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9./+-]*", value):
+        return value
+    return json.dumps(value)
 
 
 def sdk_section_bounds(

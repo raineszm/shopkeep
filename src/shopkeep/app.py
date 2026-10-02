@@ -5,7 +5,12 @@ from pathlib import Path
 from typing import Annotated
 
 from .remount import RemountOperation, remount, run_workshop_remount
-from .setup import run_workshop_launch, setup_definition, unique_sdk_names
+from .setup import (
+    managed_sdk_names,
+    run_workshop_launch,
+    setup_definition,
+    unique_sdk_names,
+)
 
 
 def create_app(
@@ -53,7 +58,7 @@ def create_app(
             setup_definition(Path.cwd(), workshop, source, sdk)
             launcher(workshop)
             if not no_remount:
-                remount(workshop, sdk, executor=executor)
+                remount(workshop, managed_sdk_names(sdk), executor=executor)
         except subprocess.CalledProcessError as error:
             typer.echo("error: workshop setup failed", err=True)
             raise typer.Exit(code=1) from error
