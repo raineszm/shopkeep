@@ -60,6 +60,18 @@ def test_setup_definition_adds_a_pass_through_sdk_with_its_requested_channel(
     )
 
 
+def test_setup_definition_adds_a_channel_less_pass_through_sdk(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / ".git" / "info").mkdir(parents=True)
+
+    setup_definition(tmp_path, "dev", None, ["custom"])
+
+    assert (tmp_path / ".workshop" / "dev.yaml").read_text(encoding="utf-8") == (
+        "name: dev\nbase: ubuntu@26.04\nsdks:\n  - name: custom\n"
+    )
+
+
 def test_setup_definition_quotes_yaml_significant_pass_through_channels(
     tmp_path: Path,
 ) -> None:
@@ -74,17 +86,18 @@ def test_setup_definition_quotes_yaml_significant_pass_through_channels(
     )
 
 
-def test_setup_definition_rejects_a_pass_through_sdk_without_a_channel(
+def test_setup_definition_adds_a_channel_less_pass_through_sdk_from_a_source(
     tmp_path: Path,
 ) -> None:
+    source = tmp_path / "source.yaml"
+    source.write_text("name: base\n", encoding="utf-8")
     (tmp_path / ".git" / "info").mkdir(parents=True)
 
-    with pytest.raises(
-        ValueError, match="SDK channel is required for pass-through SDK: custom"
-    ):
-        setup_definition(tmp_path, "dev", None, ["custom"])
+    setup_definition(tmp_path, "dev", source, ["custom"])
 
-    assert not (tmp_path / ".workshop" / "dev.yaml").exists()
+    assert (tmp_path / ".workshop" / "dev.yaml").read_text(encoding="utf-8") == (
+        "name: dev\nsdks:\n  - name: custom\n"
+    )
 
 
 def test_setup_definition_rejects_an_empty_pass_through_channel_from_a_source(
@@ -298,6 +311,28 @@ def test_setup_command_skips_remounting_a_pass_through_sdk(
     assert not (tmp_path / "data" / "shopkeep" / "mounts" / "Work" / "custom").exists()
 
 
+def test_setup_command_skips_a_channel_less_pass_through_sdk(
+    tmp_path: Path, monkeypatch
+) -> None:
+    (tmp_path / ".git" / "info").mkdir(parents=True)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    calls: list[RemountOperation] = []
+
+    result = runner.invoke(
+        create_app(lambda operation, _: calls.append(operation), lambda _: None),
+        ["setup", "--workshop", "dev", "--sdk", "custom", "--sdk", "skills"],
+    )
+
+    assert result.exit_code == 0
+    assert calls == [RemountOperation("dev", "skills", "skills")]
+    assert (tmp_path / ".workshop" / "dev.yaml").read_text(encoding="utf-8") == (
+        "name: dev\nbase: ubuntu@26.04\nsdks:\n  - name: custom\n"
+        "  - name: skills\n    channel: latest/edge\n"
+    )
+    assert not (tmp_path / "data" / "shopkeep" / "mounts" / "Work" / "custom").exists()
+
+
 def test_setup_command_preserves_a_pass_through_channel_in_the_default_template(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -392,6 +427,25 @@ def test_setup_command_rejects_invalid_sdk_before_writing_definition(
 
     assert result.exit_code == 2
     assert result.stderr == "error: SDK channel must not be empty\n"
+    assert not (tmp_path / ".workshop" / "dev.yaml").exists()
+
+
+@pytest.mark.parametrize("with_source", [False, True])
+def test_setup_command_rejects_an_empty_sdk_name_before_writing_definition(
+    tmp_path: Path, monkeypatch, with_source: bool
+) -> None:
+    (tmp_path / ".git" / "info").mkdir(parents=True)
+    monkeypatch.chdir(tmp_path)
+    args = ["setup", "--workshop", "dev", "--sdk", "/latest/edge"]
+    if with_source:
+        source = tmp_path / "source.yaml"
+        source.write_text("name: base\n", encoding="utf-8")
+        args.extend(["--from", str(source)])
+
+    result = runner.invoke(create_app(), args)
+
+    assert result.exit_code == 2
+    assert result.stderr == "error: SDK name must not be empty\n"
     assert not (tmp_path / ".workshop" / "dev.yaml").exists()
 
 

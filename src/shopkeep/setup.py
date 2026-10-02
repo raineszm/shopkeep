@@ -15,7 +15,7 @@ DEFAULT_DEFINITION = "base: ubuntu@26.04\nsdks: []\n"
 @dataclass(frozen=True)
 class SDKSpec:
     name: str
-    channel: str
+    channel: str | None
     managed: bool
 
 
@@ -67,7 +67,7 @@ def parse_sdk_spec(spec: str) -> SDKSpec:
         return SDKSpec(name, known["channel"], True)
     if separator:
         return SDKSpec(name, channel, False)
-    raise ValueError(f"SDK channel is required for pass-through SDK: {name}")
+    return SDKSpec(name, None, False)
 
 
 def managed_sdk_names(sdk_specs: list[str]) -> list[str]:
@@ -123,7 +123,8 @@ def add_missing_sdks(definition: str, sdk_declarations: list[SDKSpec]) -> str:
     if not sdks_match:
         definition = f"{definition.rstrip()}\nsdks:\n"
     declarations = "".join(
-        f"  - name: {yaml_scalar(sdk.name)}\n    channel: {yaml_scalar(sdk.channel)}\n"
+        f"  - name: {yaml_scalar(sdk.name)}\n"
+        + (f"    channel: {yaml_scalar(sdk.channel)}\n" if sdk.channel else "")
         for sdk in missing
     )
     if not sdks_match:
