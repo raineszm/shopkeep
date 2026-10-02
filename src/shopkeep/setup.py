@@ -27,6 +27,10 @@ def setup_definition(
         raise ValueError(f"unknown SDK: {unknown_sdks[0]}")
 
     target = project_root / ".workshop" / f"{workshop}.yaml"
+    if target.exists():
+        raise ValueError(
+            f"workshop definition already exists: {target.relative_to(project_root)}"
+        )
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(
         add_missing_sdks(set_workshop_name(definition, workshop), sdk_names),
@@ -67,15 +71,24 @@ def add_missing_sdks(definition: str, sdk_names: list[str]) -> str:
     if not missing:
         return definition
 
-    if "sdks:\n" not in definition:
+    sdks_match = re.search(r"^sdks:\s*$", definition, flags=re.MULTILINE)
+    if not sdks_match:
         definition = f"{definition.rstrip()}\nsdks:\n"
-    elif not definition.endswith("\n"):
-        definition += "\n"
     declarations = "".join(
         f"  - name: {sdk}\n    channel: {SDK_DECLARATIONS[sdk]['channel']}\n"
         for sdk in missing
     )
-    return definition + declarations
+    if not sdks_match:
+        return definition + declarations
+
+    content_start = sdks_match.end()
+    if definition[content_start : content_start + 1] == "\n":
+        content_start += 1
+    next_section = re.search(r"^[^ \t#].*$", definition[content_start:], re.MULTILINE)
+    insertion = (
+        content_start + next_section.start() if next_section else len(definition)
+    )
+    return definition[:insertion] + declarations + definition[insertion:]
 
 
 def add_local_excludes(project_root: Path, entries: list[str]) -> None:

@@ -45,6 +45,41 @@ def test_setup_definition_preserves_an_existing_requested_sdk(tmp_path: Path) ->
     )
 
 
+def test_setup_definition_adds_sdk_before_a_later_top_level_section(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.yaml"
+    source.write_text(
+        "name: base\nsdks:\n  - name: uv\nactions:\n  test: uv run pytest\n",
+        encoding="utf-8",
+    )
+    (tmp_path / ".git" / "info").mkdir(parents=True)
+
+    setup_definition(tmp_path, "dev", source, ["skills"])
+
+    assert (tmp_path / ".workshop" / "dev.yaml").read_text(encoding="utf-8") == (
+        "name: dev\nsdks:\n  - name: uv\n  - name: skills\n    channel: latest/edge\n"
+        "actions:\n  test: uv run pytest\n"
+    )
+
+
+def test_setup_definition_rejects_an_existing_target(tmp_path: Path) -> None:
+    source = tmp_path / "source.yaml"
+    source.write_text("name: base\n", encoding="utf-8")
+    target = tmp_path / ".workshop" / "dev.yaml"
+    target.parent.mkdir(parents=True)
+    target.write_text("name: existing\n", encoding="utf-8")
+
+    try:
+        setup_definition(tmp_path, "dev", source, ["skills"])
+    except ValueError as error:
+        assert str(error) == "workshop definition already exists: .workshop/dev.yaml"
+    else:
+        raise AssertionError("expected existing workshop definition to be rejected")
+
+    assert target.read_text(encoding="utf-8") == "name: existing\n"
+
+
 def test_setup_definition_rejects_a_traversing_workshop_name(tmp_path: Path) -> None:
     source = tmp_path / "source.yaml"
     source.write_text("name: base\n", encoding="utf-8")
