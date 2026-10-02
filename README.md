@@ -47,13 +47,24 @@ definition:
 | `skills` | `latest/edge` | `skills` |
 
 `opencode` and `skills` are Shopkeep-managed SDKs: Shopkeep uses their canonical
-channels and remounts their plugs automatically. Other SDKs use a Workshop-style
-`<name>/<channel>` specification; Shopkeep preserves the requested name and
-channel in the generated definition without remounting. Only the first slash
-separates the name from the channel, so channels may themselves contain slashes:
+channels and remounts their plugs automatically, even when the name is given
+without a channel. Other SDKs are pass-through SDKs: Shopkeep writes the
+requested SDK into the generated definition and does not remount it.
+
+A pass-through SDK with a channel uses a Workshop-style `<name>/<channel>`
+specification. Shopkeep preserves the requested name and channel, and only the
+first slash separates the name from the channel, so channels may themselves
+contain slashes:
 
 ```bash
 shopkeep setup --workshop dev --sdk custom/latest/edge/candidate
+```
+
+An unrecognized bare SDK name is written without a channel and is not
+remounted:
+
+```bash
+shopkeep setup --workshop dev --sdk custom
 ```
 
 Existing SDK declarations in a custom source definition are kept unchanged. The
