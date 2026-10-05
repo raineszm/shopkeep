@@ -70,3 +70,18 @@ shopkeep setup --workshop dev --sdk custom
 Existing SDK declarations in a custom source definition are kept unchanged. The
 generated definition and `.workshop.lock` are added to the repository's local
 `.git/info/exclude`; Shopkeep does not modify the shared `.gitignore`.
+
+## Connecting a Workshop to Herdr
+
+Register a running Workshop as a [Herdr](https://herdr.dev/) machine, so Herdr
+can control terminals inside it:
+
+```bash
+shopkeep herdr-connect --workshop dev
+```
+
+This reads the Workshop's `.wp` hostname from `workshop info` and runs `herdr machine add workshop@<workshop>.<project>.wp --label <workshop>.<project>`. It
+relies on Workshop's built-in SSH certificate authority (0.9.5+), so no SSH
+key import or `authorized_keys` setup is needed — the target Workshop just
+needs to be running. Workshops launched before 0.9.5 must be removed and
+relaunched to pick up the automatic SSH configuration first.

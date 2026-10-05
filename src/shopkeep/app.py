@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Annotated
 
 from .remount import RemountOperation, remount, run_workshop_remount
+from .herdr import herdr_connect
 from .setup import (
     managed_sdk_names,
     run_workshop_launch,
@@ -16,6 +17,7 @@ from .setup import (
 def create_app(
     executor: Callable[[RemountOperation, Path], None] = run_workshop_remount,
     launcher: Callable[[str], None] = run_workshop_launch,
+    connector: Callable[[str], None] = herdr_connect,
 ) -> typer.Typer:
     app = typer.Typer()
 
@@ -61,6 +63,19 @@ def create_app(
                 remount(workshop, managed_sdk_names(sdk), executor=executor)
         except subprocess.CalledProcessError as error:
             typer.echo("error: workshop setup failed", err=True)
+            raise typer.Exit(code=1) from error
+        except ValueError as error:
+            typer.echo(f"error: {error}", err=True)
+            raise typer.Exit(code=2) from error
+
+    @app.command(name="herdr-connect")
+    def herdr_connect_command(
+        workshop: Annotated[str, typer.Option("--workshop", help="Workshop name")],
+    ) -> None:
+        try:
+            connector(workshop)
+        except subprocess.CalledProcessError as error:
+            typer.echo("error: herdr machine add failed", err=True)
             raise typer.Exit(code=1) from error
         except ValueError as error:
             typer.echo(f"error: {error}", err=True)
