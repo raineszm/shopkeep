@@ -169,7 +169,7 @@ def test_setup_copies_a_source_definition_and_mounts_supported_sdks(
         workshop_project.project / ".workshop" / f"{workshop_project.name}.yaml"
     ).read_text(encoding="utf-8")
     assert "base: ubuntu@26.04\n" in definition
-    assert "  - name: opencode\n    channel: latest/stable\n" in definition
+    assert "  - name: opencode\n    channel: 2/stable\n" in definition
     assert "  - name: skills\n    channel: latest/edge\n" in definition
     assert "actions:\n  hello: echo hello\n" in definition
 
@@ -190,7 +190,7 @@ def test_setup_bootstraps_the_default_definition_without_a_source(
         "base: ubuntu@26.04\n"
         "sdks:\n"
         "  - name: opencode\n"
-        "    channel: latest/stable\n"
+        "    channel: 2/stable\n"
         "  - name: skills\n"
         "    channel: latest/edge\n"
     )

@@ -43,7 +43,7 @@ definition:
 
 | SDK | Channel | Remounted plugs |
 | --- | --- | --- |
-| `opencode` | `latest/stable` | `opencode-config`, `opencode-data` |
+| `opencode` | `2/stable` | `opencode-config`, `opencode-data` |
 | `skills` | `latest/edge` | `skills` |
 
 `opencode` and `skills` are Shopkeep-managed SDKs: Shopkeep uses their canonical

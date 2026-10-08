@@ -9,7 +9,7 @@ sdks:
   - name: uv
     channel: latest/stable
   - name: opencode
-    channel: latest/stable
+    channel: 2/stable
   - name: skills
     channel: latest/edge
 

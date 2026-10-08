@@ -6,7 +6,7 @@ import subprocess
 
 
 SDK_DECLARATIONS = {
-    "opencode": {"channel": "latest/stable"},
+    "opencode": {"channel": "2/stable"},
     "skills": {"channel": "latest/edge"},
 }
 DEFAULT_DEFINITION = "base: ubuntu@26.04\nsdks: []\n"

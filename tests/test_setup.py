@@ -175,7 +175,7 @@ def test_setup_definition_ignores_sdk_names_outside_the_sdks_section(
 
     setup_definition(tmp_path, "dev", source, ["opencode"])
 
-    assert "  - name: opencode\n    channel: latest/stable\nactions:" in (
+    assert "  - name: opencode\n    channel: 2/stable\nactions:" in (
         tmp_path / ".workshop" / "dev.yaml"
     ).read_text(encoding="utf-8")
 
