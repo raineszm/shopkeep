@@ -141,6 +141,22 @@ def test_herdr_connect_adds_the_machine_using_the_workshop_hostname() -> None:
     assert calls == [("workshop@dev.myproj.wp", "dev.myproj")]
 
 
+def test_herdr_help_lists_commands_with_descriptions() -> None:
+    result = runner.invoke(create_app(), ["herdr", "--help"])
+
+    assert result.exit_code == 0
+    assert "Register a running workshop as a Herdr machine." in result.stdout
+    assert "Remove a workshop's saved Herdr machine." in result.stdout
+
+
+def test_herdr_without_a_subcommand_prints_help() -> None:
+    result = runner.invoke(create_app(), ["herdr"])
+
+    assert "Manage Workshop entries in Herdr." in result.stdout
+    assert "connect" in result.stdout
+    assert "disconnect" in result.stdout
+
+
 def test_herdr_connect_command_connects_the_named_workshop() -> None:
     calls: list[str] = []
 

@@ -397,6 +397,17 @@ def test_cli_help_lists_remount_command() -> None:
         "Helpers to streamline the development workflow with Workshop." in result.stdout
     )
     assert "remount" in result.stdout
+    assert "setup" in result.stdout
+
+
+def test_cli_without_a_command_prints_help() -> None:
+    result = runner.invoke(app, [])
+
+    assert (
+        "Helpers to streamline the development workflow with Workshop." in result.stdout
+    )
+    assert "remount" in result.stdout
+    assert "setup" in result.stdout
 
 
 def test_main_invokes_typer_app(monkeypatch) -> None:

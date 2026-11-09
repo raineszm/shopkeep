@@ -291,6 +291,16 @@ def test_git_help_lists_identity() -> None:
 
     assert result.exit_code == 0
     assert "identity" in result.stdout
+    assert "Write the resolved git identity into a running workshop." in result.stdout
+    assert "Sign the contiguous unsigned tail of the current branch." in result.stdout
+
+
+def test_git_without_a_subcommand_prints_help() -> None:
+    result = runner.invoke(build_app(), ["git"])
+
+    assert "Manage git identity and signed review passes." in result.stdout
+    assert "identity" in result.stdout
+    assert "sign" in result.stdout
 
 
 def test_git_identity_reports_seed_failure() -> None:

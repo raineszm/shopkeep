@@ -39,13 +39,16 @@ def create_app(
     sign_planner: Callable[[Path, str | None], SignPlan] = plan_sign,
     sign_runner: GitRunner = run_git,
 ) -> typer.Typer:
-    app = typer.Typer()
+    app = typer.Typer(no_args_is_help=True)
 
     @app.callback()
     def root() -> None:
         """Helpers to streamline the development workflow with Workshop."""
 
-    git_app = typer.Typer(help="Manage git identity and signed review passes.")
+    git_app = typer.Typer(
+        help="Manage git identity and signed review passes.",
+        no_args_is_help=True,
+    )
     app.add_typer(git_app, name="git")
 
     @git_app.command(name="identity")
@@ -60,6 +63,12 @@ def create_app(
             typer.Option("--git-email", help="Git user.email for workshop commits"),
         ] = None,
     ) -> None:
+        """Write the resolved git identity into a running workshop.
+
+        Resolves user.name and user.email from the project root unless
+        --git-name or --git-email overrides them, then applies the identity
+        through the workshop's project-shopkeep mount.
+        """
         try:
             validate_workshop_name(workshop)
             identity = identity_resolver(Path.cwd(), git_name, git_email)
@@ -90,6 +99,12 @@ def create_app(
             typer.Option("--dry-run", help="Print the signing commands and exit"),
         ] = False,
     ) -> None:
+        """Sign the contiguous unsigned tail of the current branch.
+
+        The boundary comes from --from, then the branch upstream, then
+        origin/HEAD. --explain prints the plan without signing; --dry-run also
+        prints the git commands.
+        """
         try:
             plan = sign_planner(Path.cwd(), from_rev)
             typer.echo(format_sign_plan(plan), nl=False)
@@ -137,6 +152,11 @@ def create_app(
             typer.Option("--profile", help="Profile root directory"),
         ] = "Work",
     ) -> None:
+        """Remount SDK data from the host into a running workshop.
+
+        Pass --sdk once per SDK to remount; each SDK's declared plugs are
+        pointed at their directories under the profile root.
+        """
         remount(workshop, sdk, profile, executor)
 
     @app.command(name="setup")
@@ -163,6 +183,13 @@ def create_app(
             typer.Option("--no-remount", help="Do not remount SDK plugs after setup"),
         ] = False,
     ) -> None:
+        """Create a project-local workshop definition, launch it, and remount SDKs.
+
+        Without --from, writes a minimal definition at .workshop/<name>.yaml.
+        Adds the requested SDKs plus the local project-shopkeep SDK, applies
+        the git identity, and remounts managed SDK plugs unless --no-remount
+        is given.
+        """
         try:
             specs = canonicalize_sdk_specs(sdk)
             validate_workshop_name(workshop)
@@ -187,13 +214,21 @@ def create_app(
             typer.echo(f"error: {error}", err=True)
             raise typer.Exit(code=2) from error
 
-    herdr_app = typer.Typer(help="Manage Workshop entries in Herdr.")
+    herdr_app = typer.Typer(
+        help="Manage Workshop entries in Herdr.",
+        no_args_is_help=True,
+    )
     app.add_typer(herdr_app, name="herdr")
 
     @herdr_app.command(name="connect")
     def herdr_connect_command(
         workshop: Annotated[str, typer.Option("--workshop", help="Workshop name")],
     ) -> None:
+        """Register a running workshop as a Herdr machine.
+
+        Reads the workshop's .wp hostname from `workshop info` and runs
+        `herdr machine add` with the workshop's label.
+        """
         try:
             connector(workshop)
         except subprocess.CalledProcessError as error:
@@ -207,6 +242,11 @@ def create_app(
     def herdr_disconnect_command(
         workshop: Annotated[str, typer.Option("--workshop", help="Workshop name")],
     ) -> None:
+        """Remove a workshop's saved Herdr machine.
+
+        Finds the machine by the workshop's label and runs
+        `herdr machine remove`; remote sessions and agents keep running.
+        """
         try:
             disconnector(workshop)
         except subprocess.CalledProcessError as error:
