@@ -10,6 +10,15 @@ SDK_DECLARATIONS = {
     "skills": {"channel": "latest/edge"},
 }
 DEFAULT_DEFINITION = "base: ubuntu@26.04\nsdks: []\n"
+SHOPKEEP_SDK_NAME = "shopkeep"
+SHOPKEEP_SDK_REFERENCE = "project-shopkeep"
+SHOPKEEP_SDK_MANIFEST = (
+    "name: shopkeep\n"
+    "plugs:\n"
+    "  git-config:\n"
+    "    interface: mount\n"
+    "    workshop-target: /home/workshop/.config/git\n"
+)
 
 
 @dataclass(frozen=True)
@@ -29,6 +38,8 @@ def setup_definition(
     validate_workshop_name(workshop)
     sdk_specs = unique_sdk_names(sdk_specs)
     sdk_declarations = [parse_sdk_spec(spec) for spec in sdk_specs]
+    if not any(sdk.name == SHOPKEEP_SDK_REFERENCE for sdk in sdk_declarations):
+        sdk_declarations.append(SDKSpec(SHOPKEEP_SDK_REFERENCE, None, False))
     if source is None:
         definition = DEFAULT_DEFINITION
     else:
@@ -42,13 +53,44 @@ def setup_definition(
         raise ValueError(
             f"workshop definition already exists: {target.relative_to(project_root)}"
         )
+    validate_project_shopkeep_sdk(project_root)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(
         add_missing_sdks(set_workshop_name(definition, workshop), sdk_declarations),
         encoding="utf-8",
     )
-    add_local_excludes(project_root, [f".workshop/{workshop}.yaml", ".workshop.lock"])
+    write_project_shopkeep_sdk(project_root)
+    add_local_excludes(
+        project_root,
+        [
+            f".workshop/{workshop}.yaml",
+            ".workshop.lock",
+            f".workshop/{SHOPKEEP_SDK_NAME}/",
+        ],
+    )
     return target
+
+
+def project_shopkeep_sdk_path(project_root: Path) -> Path:
+    return project_root / ".workshop" / SHOPKEEP_SDK_NAME / "sdk.yaml"
+
+
+def validate_project_shopkeep_sdk(project_root: Path) -> None:
+    manifest = project_shopkeep_sdk_path(project_root)
+    if not manifest.exists():
+        return
+    if manifest.read_text(encoding="utf-8") != SHOPKEEP_SDK_MANIFEST:
+        raise ValueError(
+            "workshop SDK already exists with different content: "
+            f"{manifest.relative_to(project_root)}"
+        )
+
+
+def write_project_shopkeep_sdk(project_root: Path) -> Path:
+    manifest = project_shopkeep_sdk_path(project_root)
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(SHOPKEEP_SDK_MANIFEST, encoding="utf-8")
+    return manifest
 
 
 def unique_sdk_names(sdk_names: list[str]) -> list[str]:

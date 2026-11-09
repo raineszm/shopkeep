@@ -16,8 +16,9 @@ shopkeep setup \
 ```
 
 Without `--from`, Shopkeep writes a minimal definition with the selected name,
-`base: ubuntu@26.04`, and an empty SDK list before adding requested SDKs. To
-use a custom source definition instead, pass `--from`:
+`base: ubuntu@26.04`, and an empty SDK list before adding requested SDKs and the
+local `project-shopkeep` SDK. To use a custom source definition instead, pass
+`--from`:
 
 ```bash
 shopkeep setup --workshop dev --from .workshop/base.yaml --sdk opencode
@@ -37,6 +38,9 @@ without remounting SDK plugs:
 ```bash
 shopkeep setup --workshop dev --from .workshop/base.yaml --sdk opencode --no-remount
 ```
+
+`--no-remount` still writes the workshop git identity; it only skips SDK data
+remounts.
 
 Shopkeep supports these SDK declarations when they are absent from the source
 definition:
@@ -68,8 +72,76 @@ shopkeep setup --workshop dev --sdk custom
 ```
 
 Existing SDK declarations in a custom source definition are kept unchanged. The
-generated definition and `.workshop.lock` are added to the repository's local
-`.git/info/exclude`; Shopkeep does not modify the shared `.gitignore`.
+generated definition, `.workshop/shopkeep/`, and `.workshop.lock` are added to
+the repository's local `.git/info/exclude`; Shopkeep does not modify the shared
+`.gitignore`.
+
+Shopkeep also generates the local, ignored `project-shopkeep` SDK at
+`.workshop/shopkeep/sdk.yaml`. It provides the persistent mount used for the
+workshop git config; it is not a Store SDK and has no channel.
+
+## Git identity inside the workshop
+
+`shopkeep setup` resolves the effective `user.name` and `user.email` from the
+project root on the host, so a repository-local identity wins over the global
+one. Pass `--git-name` and `--git-email` to override either value:
+
+```bash
+shopkeep setup \
+  --workshop dev \
+  --sdk opencode \
+  --git-name "Your Name" \
+  --git-email "you@example.com"
+```
+
+If either value is missing, setup fails before writing anything. The identity is
+written to `/home/workshop/.config/git/config` through the mount provided by
+`project-shopkeep`. Commit and tag signing are explicitly disabled inside the
+workshop.
+
+Identity is resolved once at setup. After `workshop remove` and `workshop launch`, or after changing the host identity, re-apply it with:
+
+```bash
+shopkeep git identity --workshop dev
+```
+
+## Reviewing and signing commits
+
+Commits authored inside the workshop are unsigned by design. Review them on the
+host, then sign them with the host's configured signer:
+
+```bash
+shopkeep git sign --explain
+shopkeep git sign --dry-run
+shopkeep git sign
+```
+
+`shopkeep git sign` signs the contiguous unsigned tail of the current branch.
+It resolves the boundary from `--from <rev>` when given, otherwise from the
+branch upstream, otherwise from `origin/HEAD`; pass `--from` explicitly when
+neither exists. `--explain` prints the range and commits, and `--dry-run` also
+prints the exact git commands without changing anything.
+
+To sign a different range, name its base:
+
+```bash
+shopkeep git sign --from origin/main
+```
+
+Signed commits stop the walk, so the command never rewrites already-signed
+history. It refuses a detached HEAD, tracked or staged changes, an in-progress
+rebase, merge commits in the unsigned range, and `B`/`E`/`X`/`Y`/`R` signature
+states.
+
+If signing fails, a multi-commit rebase is left paused:
+
+```bash
+git rebase --continue   # after fixing the signer
+git rebase --abort      # to return to the original state
+```
+
+Signing rewrites commit hashes. If the branch was already pushed, force-push it
+after the review pass.
 
 ## Connecting a Workshop to Herdr
 

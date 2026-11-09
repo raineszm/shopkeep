@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from pathlib import Path
 import subprocess
 
@@ -5,11 +6,37 @@ import pytest
 from typer.testing import CliRunner
 
 from shopkeep.app import create_app
-from shopkeep.remount import RemountOperation
-from shopkeep.setup import setup_definition
+from shopkeep.identity import GitIdentity
+from shopkeep.remount import RemountOperation, run_workshop_remount
+from shopkeep.setup import run_workshop_launch, setup_definition
 
 
 runner = CliRunner()
+
+
+def resolve_test_identity(_: Path, __: str | None, ___: str | None) -> GitIdentity:
+    return GitIdentity("Test User", "test@example.com")
+
+
+def ignore_identity_seed(_: str, __: GitIdentity) -> None:
+    pass
+
+
+def build_test_app(
+    executor: Callable[[RemountOperation, Path], None] = run_workshop_remount,
+    launcher: Callable[[str], None] = run_workshop_launch,
+    *,
+    identity_resolver: Callable[
+        [Path, str | None, str | None], GitIdentity
+    ] = resolve_test_identity,
+    identity_seeder: Callable[[str, GitIdentity], None] = ignore_identity_seed,
+):
+    return create_app(
+        executor=executor,
+        launcher=launcher,
+        identity_resolver=identity_resolver,
+        identity_seeder=identity_seeder,
+    )
 
 
 def test_setup_definition_uses_the_default_template_without_a_source(
@@ -20,10 +47,48 @@ def test_setup_definition_uses_the_default_template_without_a_source(
     setup_definition(tmp_path, "dev", None, [])
 
     assert (tmp_path / ".workshop" / "dev.yaml").read_text(encoding="utf-8") == (
-        "name: dev\nbase: ubuntu@26.04\nsdks: []\n"
+        "name: dev\nbase: ubuntu@26.04\nsdks:\n  - name: project-shopkeep\n"
     )
     assert (tmp_path / ".git" / "info" / "exclude").read_text(encoding="utf-8") == (
-        ".workshop/dev.yaml\n.workshop.lock\n"
+        ".workshop/dev.yaml\n.workshop.lock\n.workshop/shopkeep/\n"
+    )
+
+
+def test_setup_definition_writes_the_project_shopkeep_sdk_manifest(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / ".git" / "info").mkdir(parents=True)
+
+    setup_definition(tmp_path, "dev", None, [])
+
+    assert (tmp_path / ".workshop" / "shopkeep" / "sdk.yaml").read_text(
+        encoding="utf-8"
+    ) == (
+        "name: shopkeep\n"
+        "plugs:\n"
+        "  git-config:\n"
+        "    interface: mount\n"
+        "    workshop-target: /home/workshop/.config/git\n"
+    )
+
+
+def test_setup_definition_adds_the_project_shopkeep_sdk(tmp_path: Path) -> None:
+    (tmp_path / ".git" / "info").mkdir(parents=True)
+
+    setup_definition(tmp_path, "dev", None, [])
+
+    assert (tmp_path / ".workshop" / "dev.yaml").read_text(encoding="utf-8") == (
+        "name: dev\nbase: ubuntu@26.04\nsdks:\n  - name: project-shopkeep\n"
+    )
+
+
+def test_setup_definition_excludes_the_project_shopkeep_sdk(tmp_path: Path) -> None:
+    (tmp_path / ".git" / "info").mkdir(parents=True)
+
+    setup_definition(tmp_path, "dev", None, [])
+
+    assert (tmp_path / ".git" / "info" / "exclude").read_text(encoding="utf-8") == (
+        ".workshop/dev.yaml\n.workshop.lock\n.workshop/shopkeep/\n"
     )
 
 
@@ -40,9 +105,10 @@ def test_setup_definition_copies_adds_sdk_and_excludes_local_artifacts(
 
     assert (tmp_path / ".workshop" / "dev.yaml").read_text(encoding="utf-8") == (
         "name: dev\nsdks:\n  - name: uv\n  - name: skills\n    channel: latest/edge\n"
+        "  - name: project-shopkeep\n"
     )
     assert exclude.read_text(encoding="utf-8") == (
-        ".DS_Store\n.workshop/dev.yaml\n.workshop.lock\n"
+        ".DS_Store\n.workshop/dev.yaml\n.workshop.lock\n.workshop/shopkeep/\n"
     )
 
 
@@ -57,6 +123,7 @@ def test_setup_definition_adds_a_pass_through_sdk_with_its_requested_channel(
 
     assert (tmp_path / ".workshop" / "dev.yaml").read_text(encoding="utf-8") == (
         "name: dev\nsdks:\n  - name: custom\n    channel: latest/edge/candidate\n"
+        "  - name: project-shopkeep\n"
     )
 
 
@@ -69,6 +136,7 @@ def test_setup_definition_adds_a_channel_less_pass_through_sdk(
 
     assert (tmp_path / ".workshop" / "dev.yaml").read_text(encoding="utf-8") == (
         "name: dev\nbase: ubuntu@26.04\nsdks:\n  - name: custom\n"
+        "  - name: project-shopkeep\n"
     )
 
 
@@ -83,6 +151,7 @@ def test_setup_definition_quotes_yaml_significant_pass_through_channels(
 
     assert (tmp_path / ".workshop" / "dev.yaml").read_text(encoding="utf-8") == (
         'name: dev\nsdks:\n  - name: custom\n    channel: "latest #comment"\n'
+        "  - name: project-shopkeep\n"
     )
 
 
@@ -96,7 +165,7 @@ def test_setup_definition_adds_a_channel_less_pass_through_sdk_from_a_source(
     setup_definition(tmp_path, "dev", source, ["custom"])
 
     assert (tmp_path / ".workshop" / "dev.yaml").read_text(encoding="utf-8") == (
-        "name: dev\nsdks:\n  - name: custom\n"
+        "name: dev\nsdks:\n  - name: custom\n  - name: project-shopkeep\n"
     )
 
 
@@ -125,7 +194,25 @@ def test_setup_definition_preserves_an_existing_requested_sdk(tmp_path: Path) ->
 
     assert (tmp_path / ".workshop" / "dev.yaml").read_text(encoding="utf-8") == (
         "name: dev\nsdks:\n  - name: skills\n    channel: candidate\n"
+        "  - name: project-shopkeep\n"
     )
+
+
+def test_setup_definition_preserves_an_existing_project_shopkeep_sdk(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.yaml"
+    source.write_text(
+        "name: base\nsdks:\n  - name: project-shopkeep\n",
+        encoding="utf-8",
+    )
+    (tmp_path / ".git" / "info").mkdir(parents=True)
+
+    setup_definition(tmp_path, "dev", source, [])
+
+    assert (tmp_path / ".workshop" / "dev.yaml").read_text(encoding="utf-8").count(
+        "  - name: project-shopkeep\n"
+    ) == 1
 
 
 def test_setup_definition_adds_sdk_before_a_later_top_level_section(
@@ -142,8 +229,23 @@ def test_setup_definition_adds_sdk_before_a_later_top_level_section(
 
     assert (tmp_path / ".workshop" / "dev.yaml").read_text(encoding="utf-8") == (
         "name: dev\nsdks:\n  - name: uv\n  - name: skills\n    channel: latest/edge\n"
-        "actions:\n  test: uv run pytest\n"
+        "  - name: project-shopkeep\nactions:\n  test: uv run pytest\n"
     )
+
+
+def test_setup_definition_refuses_to_overwrite_a_different_shopkeep_sdk(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / ".git" / "info").mkdir(parents=True)
+    manifest = tmp_path / ".workshop" / "shopkeep" / "sdk.yaml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text("name: custom\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="different content"):
+        setup_definition(tmp_path, "dev", None, [])
+
+    assert manifest.read_text(encoding="utf-8") == "name: custom\n"
+    assert not (tmp_path / ".workshop" / "dev.yaml").exists()
 
 
 def test_setup_definition_rejects_an_existing_target(tmp_path: Path) -> None:
@@ -161,6 +263,7 @@ def test_setup_definition_rejects_an_existing_target(tmp_path: Path) -> None:
         raise AssertionError("expected existing workshop definition to be rejected")
 
     assert target.read_text(encoding="utf-8") == "name: existing\n"
+    assert not (tmp_path / ".workshop" / "shopkeep" / "sdk.yaml").exists()
 
 
 def test_setup_definition_ignores_sdk_names_outside_the_sdks_section(
@@ -175,9 +278,10 @@ def test_setup_definition_ignores_sdk_names_outside_the_sdks_section(
 
     setup_definition(tmp_path, "dev", source, ["opencode"])
 
-    assert "  - name: opencode\n    channel: 2/stable\nactions:" in (
-        tmp_path / ".workshop" / "dev.yaml"
-    ).read_text(encoding="utf-8")
+    assert (
+        "  - name: opencode\n    channel: 2/stable\n"
+        "  - name: project-shopkeep\nactions:"
+    ) in (tmp_path / ".workshop" / "dev.yaml").read_text(encoding="utf-8")
 
 
 def test_setup_definition_deduplicates_requested_sdks(tmp_path: Path) -> None:
@@ -202,7 +306,7 @@ def test_setup_definition_uses_linked_worktree_exclude_file(tmp_path: Path) -> N
     setup_definition(tmp_path, "dev", source, ["skills"])
 
     assert (git_dir / "info" / "exclude").read_text(encoding="utf-8") == (
-        ".workshop/dev.yaml\n.workshop.lock\n"
+        ".workshop/dev.yaml\n.workshop.lock\n.workshop/shopkeep/\n"
     )
 
 
@@ -238,7 +342,7 @@ def test_setup_command_remounts_requested_sdk_after_writing_definition(
         launches.append(workshop)
 
     result = runner.invoke(
-        create_app(record_remount, record_launch),
+        build_test_app(record_remount, record_launch),
         ["setup", "--workshop", "dev", "--from", str(source), "--sdk", "skills"],
     )
 
@@ -264,7 +368,7 @@ def test_setup_command_uses_the_default_template_without_from(
         launches.append(workshop)
 
     result = runner.invoke(
-        create_app(record_remount, record_launch),
+        build_test_app(record_remount, record_launch),
         ["setup", "--workshop", "dev", "--sdk", "skills"],
     )
 
@@ -273,7 +377,7 @@ def test_setup_command_uses_the_default_template_without_from(
     assert calls == [RemountOperation("dev", "skills", "skills")]
     assert (tmp_path / ".workshop" / "dev.yaml").read_text(encoding="utf-8") == (
         "name: dev\nbase: ubuntu@26.04\nsdks:\n  - name: skills\n"
-        "    channel: latest/edge\n"
+        "    channel: latest/edge\n  - name: project-shopkeep\n"
     )
 
 
@@ -289,7 +393,7 @@ def test_setup_command_skips_remounting_a_pass_through_sdk(
         calls.append(operation)
 
     result = runner.invoke(
-        create_app(record_remount, lambda _: None),
+        build_test_app(record_remount, lambda _: None),
         [
             "setup",
             "--workshop",
@@ -306,7 +410,7 @@ def test_setup_command_skips_remounting_a_pass_through_sdk(
     assert (tmp_path / ".workshop" / "dev.yaml").read_text(encoding="utf-8") == (
         "name: dev\nbase: ubuntu@26.04\nsdks:\n  - name: custom\n"
         "    channel: latest/edge/candidate\n  - name: skills\n"
-        "    channel: latest/edge\n"
+        "    channel: latest/edge\n  - name: project-shopkeep\n"
     )
     assert not (tmp_path / "data" / "shopkeep" / "mounts" / "Work" / "custom").exists()
 
@@ -320,7 +424,7 @@ def test_setup_command_skips_a_channel_less_pass_through_sdk(
     calls: list[RemountOperation] = []
 
     result = runner.invoke(
-        create_app(lambda operation, _: calls.append(operation), lambda _: None),
+        build_test_app(lambda operation, _: calls.append(operation), lambda _: None),
         ["setup", "--workshop", "dev", "--sdk", "custom", "--sdk", "skills"],
     )
 
@@ -328,7 +432,7 @@ def test_setup_command_skips_a_channel_less_pass_through_sdk(
     assert calls == [RemountOperation("dev", "skills", "skills")]
     assert (tmp_path / ".workshop" / "dev.yaml").read_text(encoding="utf-8") == (
         "name: dev\nbase: ubuntu@26.04\nsdks:\n  - name: custom\n"
-        "  - name: skills\n    channel: latest/edge\n"
+        "  - name: skills\n    channel: latest/edge\n  - name: project-shopkeep\n"
     )
     assert not (tmp_path / "data" / "shopkeep" / "mounts" / "Work" / "custom").exists()
 
@@ -340,14 +444,14 @@ def test_setup_command_preserves_a_pass_through_channel_in_the_default_template(
     monkeypatch.chdir(tmp_path)
 
     result = runner.invoke(
-        create_app(lambda _operation, _source: None, lambda _: None),
+        build_test_app(lambda _operation, _source: None, lambda _: None),
         ["setup", "--workshop", "dev", "--sdk", "custom/latest/edge/candidate"],
     )
 
     assert result.exit_code == 0
     assert (tmp_path / ".workshop" / "dev.yaml").read_text(encoding="utf-8") == (
         "name: dev\nbase: ubuntu@26.04\nsdks:\n  - name: custom\n"
-        "    channel: latest/edge/candidate\n"
+        "    channel: latest/edge/candidate\n  - name: project-shopkeep\n"
     )
 
 
@@ -362,7 +466,7 @@ def test_setup_command_skips_remounting_a_source_selected_pass_through_sdk(
     calls: list[RemountOperation] = []
 
     result = runner.invoke(
-        create_app(lambda operation, _: calls.append(operation), lambda _: None),
+        build_test_app(lambda operation, _: calls.append(operation), lambda _: None),
         [
             "setup",
             "--workshop",
@@ -389,7 +493,7 @@ def test_setup_command_remounts_managed_sdk_with_a_source_selected_pass_through_
     calls: list[RemountOperation] = []
 
     result = runner.invoke(
-        create_app(lambda operation, _: calls.append(operation), lambda _: None),
+        build_test_app(lambda operation, _: calls.append(operation), lambda _: None),
         [
             "setup",
             "--workshop",
@@ -407,7 +511,7 @@ def test_setup_command_remounts_managed_sdk_with_a_source_selected_pass_through_
     assert calls == [RemountOperation("dev", "skills", "skills")]
     assert (tmp_path / ".workshop" / "dev.yaml").read_text(encoding="utf-8") == (
         "name: dev\nsdks:\n  - name: custom\n    channel: latest/edge\n"
-        "  - name: skills\n    channel: latest/edge\n"
+        "  - name: skills\n    channel: latest/edge\n  - name: project-shopkeep\n"
     )
 
 
@@ -423,7 +527,7 @@ def test_setup_command_rejects_invalid_sdk_before_writing_definition(
         source.write_text("name: base\n", encoding="utf-8")
         args.extend(["--from", str(source)])
 
-    result = runner.invoke(create_app(), args)
+    result = runner.invoke(build_test_app(), args)
 
     assert result.exit_code == 2
     assert result.stderr == "error: SDK channel must not be empty\n"
@@ -442,7 +546,7 @@ def test_setup_command_rejects_an_empty_sdk_name_before_writing_definition(
         source.write_text("name: base\n", encoding="utf-8")
         args.extend(["--from", str(source)])
 
-    result = runner.invoke(create_app(), args)
+    result = runner.invoke(build_test_app(), args)
 
     assert result.exit_code == 2
     assert result.stderr == "error: SDK name must not be empty\n"
@@ -456,14 +560,14 @@ def test_setup_command_uses_a_managed_sdks_canonical_channel(
     monkeypatch.chdir(tmp_path)
 
     result = runner.invoke(
-        create_app(lambda _operation, _source: None, lambda _: None),
+        build_test_app(lambda _operation, _source: None, lambda _: None),
         ["setup", "--workshop", "dev", "--sdk", "skills/candidate"],
     )
 
     assert result.exit_code == 0
     assert (tmp_path / ".workshop" / "dev.yaml").read_text(encoding="utf-8") == (
         "name: dev\nbase: ubuntu@26.04\nsdks:\n  - name: skills\n"
-        "    channel: latest/edge\n"
+        "    channel: latest/edge\n  - name: project-shopkeep\n"
     )
 
 
@@ -475,7 +579,7 @@ def test_setup_command_remounts_a_managed_sdk_once_for_equivalent_specifications
     calls: list[RemountOperation] = []
 
     result = runner.invoke(
-        create_app(lambda operation, _: calls.append(operation), lambda _: None),
+        build_test_app(lambda operation, _: calls.append(operation), lambda _: None),
         [
             "setup",
             "--workshop",
@@ -508,7 +612,7 @@ def test_setup_command_skips_remount_with_no_remount(
         launches.append(workshop)
 
     result = runner.invoke(
-        create_app(record_remount, record_launch),
+        build_test_app(record_remount, record_launch),
         [
             "setup",
             "--workshop",
@@ -524,6 +628,160 @@ def test_setup_command_skips_remount_with_no_remount(
     assert result.exit_code == 0
     assert launches == ["dev"]
     assert calls == []
+
+
+def test_setup_command_seeds_git_identity_after_launch(
+    tmp_path: Path, monkeypatch
+) -> None:
+    (tmp_path / ".git" / "info").mkdir(parents=True)
+    monkeypatch.chdir(tmp_path)
+    seeds: list[tuple[str, GitIdentity]] = []
+
+    def resolve_identity(
+        project_root: Path, name: str | None, email: str | None
+    ) -> GitIdentity:
+        assert project_root == tmp_path
+        return GitIdentity("Test User", "test@example.com")
+
+    def record_seed(workshop: str, identity: GitIdentity) -> None:
+        seeds.append((workshop, identity))
+
+    result = runner.invoke(
+        build_test_app(
+            lambda _operation, _source: None,
+            lambda _: None,
+            identity_resolver=resolve_identity,
+            identity_seeder=record_seed,
+        ),
+        ["setup", "--workshop", "dev", "--sdk", "skills"],
+    )
+
+    assert result.exit_code == 0
+    assert seeds == [("dev", GitIdentity("Test User", "test@example.com"))]
+
+
+def test_setup_command_passes_git_identity_overrides(
+    tmp_path: Path, monkeypatch
+) -> None:
+    (tmp_path / ".git" / "info").mkdir(parents=True)
+    monkeypatch.chdir(tmp_path)
+    received: list[tuple[Path, str | None, str | None]] = []
+
+    def resolve_identity(
+        project_root: Path, name: str | None, email: str | None
+    ) -> GitIdentity:
+        received.append((project_root, name, email))
+        return GitIdentity(name or "", email or "")
+
+    result = runner.invoke(
+        build_test_app(
+            lambda _operation, _source: None,
+            lambda _: None,
+            identity_resolver=resolve_identity,
+        ),
+        [
+            "setup",
+            "--workshop",
+            "dev",
+            "--sdk",
+            "skills",
+            "--git-name",
+            "Override User",
+            "--git-email",
+            "override@example.com",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert received == [(tmp_path, "Override User", "override@example.com")]
+
+
+def test_setup_command_seeds_identity_with_no_remount(
+    tmp_path: Path, monkeypatch
+) -> None:
+    (tmp_path / ".git" / "info").mkdir(parents=True)
+    monkeypatch.chdir(tmp_path)
+    seeds: list[tuple[str, GitIdentity]] = []
+
+    def record_seed(workshop: str, identity: GitIdentity) -> None:
+        seeds.append((workshop, identity))
+
+    result = runner.invoke(
+        build_test_app(
+            lambda _operation, _source: None,
+            lambda _: None,
+            identity_seeder=record_seed,
+        ),
+        ["setup", "--workshop", "dev", "--sdk", "skills", "--no-remount"],
+    )
+
+    assert result.exit_code == 0
+    assert seeds == [("dev", GitIdentity("Test User", "test@example.com"))]
+
+
+def test_setup_command_rejects_missing_identity_before_writing(
+    tmp_path: Path, monkeypatch
+) -> None:
+    (tmp_path / ".git" / "info").mkdir(parents=True)
+    monkeypatch.chdir(tmp_path)
+
+    def fail_resolution(_: Path, __: str | None, ___: str | None) -> GitIdentity:
+        raise ValueError("git identity is not configured: user.name (pass --git-name)")
+
+    result = runner.invoke(
+        build_test_app(identity_resolver=fail_resolution),
+        ["setup", "--workshop", "dev", "--sdk", "skills"],
+    )
+
+    assert result.exit_code == 2
+    assert "error: git identity is not configured" in result.stderr
+    assert not (tmp_path / ".workshop" / "dev.yaml").exists()
+    assert not (tmp_path / ".workshop" / "shopkeep" / "sdk.yaml").exists()
+
+
+def test_setup_command_reports_identity_seed_failure(
+    tmp_path: Path, monkeypatch
+) -> None:
+    (tmp_path / ".git" / "info").mkdir(parents=True)
+    monkeypatch.chdir(tmp_path)
+
+    def fail_seed(workshop: str, _: GitIdentity) -> None:
+        raise subprocess.CalledProcessError(1, ["workshop", "exec", workshop])
+
+    result = runner.invoke(
+        build_test_app(
+            lambda _operation, _source: None,
+            lambda _: None,
+            identity_seeder=fail_seed,
+        ),
+        ["setup", "--workshop", "dev", "--sdk", "skills"],
+    )
+
+    assert result.exit_code == 1
+    assert "workshop launched but git identity was not applied" in result.stderr
+    assert "shopkeep git identity --workshop dev" in result.stderr
+    assert (tmp_path / ".workshop" / "dev.yaml").exists()
+
+
+def test_setup_command_validates_sdk_before_resolving_identity(
+    tmp_path: Path, monkeypatch
+) -> None:
+    (tmp_path / ".git" / "info").mkdir(parents=True)
+    monkeypatch.chdir(tmp_path)
+    resolved: list[bool] = []
+
+    def resolve_identity(_: Path, __: str | None, ___: str | None) -> GitIdentity:
+        resolved.append(True)
+        return GitIdentity("Test User", "test@example.com")
+
+    result = runner.invoke(
+        build_test_app(identity_resolver=resolve_identity),
+        ["setup", "--workshop", "dev", "--sdk", "custom/"],
+    )
+
+    assert result.exit_code == 2
+    assert result.stderr == "error: SDK channel must not be empty\n"
+    assert resolved == []
 
 
 def test_setup_command_stops_when_workshop_launch_fails(
@@ -542,7 +800,7 @@ def test_setup_command_stops_when_workshop_launch_fails(
         raise subprocess.CalledProcessError(1, ["workshop", "launch"])
 
     result = runner.invoke(
-        create_app(record_remount, fail_launch),
+        build_test_app(record_remount, fail_launch),
         ["setup", "--workshop", "dev", "--from", str(source), "--sdk", "skills"],
     )
 

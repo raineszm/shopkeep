@@ -42,6 +42,8 @@ runner = CliRunner()
 
 REQUESTED_SDKS = ("opencode", "skills")
 DEFAULT_PROFILE = "Work"
+GIT_NAME = "Integration User"
+GIT_EMAIL = "integration@example.com"
 
 
 @dataclass(frozen=True)
@@ -119,6 +121,8 @@ def workshop_project(
     project = tmp_path / "project"
     project.mkdir()
     subprocess.run(["git", "init", "-q"], cwd=project, check=True)
+    subprocess.run(["git", "config", "user.name", GIT_NAME], cwd=project, check=True)
+    subprocess.run(["git", "config", "user.email", GIT_EMAIL], cwd=project, check=True)
     data_root = isolated_data_root()
     workshop_name = f"it-{uuid.uuid4().hex[:8]}"
     monkeypatch.chdir(project)
@@ -151,6 +155,58 @@ def assert_workshop_is_set_up(workshop: WorkshopProject) -> None:
         "command -v opencode",
     )
     assert available.stdout.strip() != ""
+    assert_git_identity_is_set(workshop)
+
+
+def assert_git_identity_is_set(workshop: WorkshopProject) -> None:
+    config = run_workshop(
+        workshop.project,
+        "exec",
+        "--uid",
+        "1000",
+        "--gid",
+        "1000",
+        workshop.name,
+        "--",
+        "bash",
+        "-lc",
+        "cat ~/.config/git/config",
+    ).stdout
+    assert (
+        f"[user]\n\tname = {GIT_NAME}\n\temail = {GIT_EMAIL}\n"
+        "[commit]\n\tgpgsign = false\n"
+        "[tag]\n\tgpgsign = false\n"
+    ) == config
+
+    git_available = run_workshop(
+        workshop.project,
+        "exec",
+        "--uid",
+        "1000",
+        "--gid",
+        "1000",
+        workshop.name,
+        "--",
+        "bash",
+        "-lc",
+        "command -v git",
+    )
+    if git_available.stdout.strip():
+        email = run_workshop(
+            workshop.project,
+            "exec",
+            "--uid",
+            "1000",
+            "--gid",
+            "1000",
+            workshop.name,
+            "--",
+            "git",
+            "config",
+            "--get",
+            "user.email",
+        )
+        assert email.stdout.strip() == GIT_EMAIL
 
 
 def test_setup_copies_a_source_definition_and_mounts_supported_sdks(
@@ -171,9 +227,64 @@ def test_setup_copies_a_source_definition_and_mounts_supported_sdks(
     assert "base: ubuntu@26.04\n" in definition
     assert "  - name: opencode\n    channel: 2/stable\n" in definition
     assert "  - name: skills\n    channel: latest/edge\n" in definition
+    assert "  - name: project-shopkeep\n" in definition
     assert "actions:\n  hello: echo hello\n" in definition
 
     assert_workshop_is_set_up(workshop_project)
+
+
+def test_git_identity_survives_a_refresh(
+    workshop_project: WorkshopProject,
+) -> None:
+    result = runner.invoke(create_app(), setup_args(workshop_project.name, None))
+    assert result.exit_code == 0, result.output
+
+    run_workshop(workshop_project.project, "refresh", workshop_project.name)
+
+    assert_git_identity_is_set(workshop_project)
+
+
+def test_git_identity_command_restores_a_deleted_config(
+    workshop_project: WorkshopProject,
+) -> None:
+    result = runner.invoke(create_app(), setup_args(workshop_project.name, None))
+    assert result.exit_code == 0, result.output
+
+    run_workshop(
+        workshop_project.project,
+        "exec",
+        "--uid",
+        "1000",
+        "--gid",
+        "1000",
+        workshop_project.name,
+        "--",
+        "bash",
+        "-lc",
+        "rm -f ~/.config/git/config",
+    )
+    status = run_workshop(
+        workshop_project.project,
+        "exec",
+        "--uid",
+        "1000",
+        "--gid",
+        "1000",
+        workshop_project.name,
+        "--",
+        "bash",
+        "-lc",
+        "[ -f ~/.config/git/config ] && echo present || echo missing",
+    )
+    assert status.stdout.strip() == "missing"
+
+    result = runner.invoke(
+        create_app(),
+        ["git", "identity", "--workshop", workshop_project.name],
+    )
+    assert result.exit_code == 0, result.output
+
+    assert_git_identity_is_set(workshop_project)
 
 
 def test_setup_bootstraps_the_default_definition_without_a_source(
@@ -193,6 +304,7 @@ def test_setup_bootstraps_the_default_definition_without_a_source(
         "    channel: 2/stable\n"
         "  - name: skills\n"
         "    channel: latest/edge\n"
+        "  - name: project-shopkeep\n"
     )
 
     assert_workshop_is_set_up(workshop_project)
