@@ -6,31 +6,7 @@ import subprocess
 import typer
 from platformdirs import user_data_path
 
-
-@dataclass(frozen=True)
-class SDKKnowledge:
-    plugs_by_sdk: dict[str, list[str]]
-
-    def resolve(self, spec: str) -> tuple[str, list[str]]:
-        sdk_name, separator, plug = spec.partition(":")
-        if separator:
-            return sdk_name, [plug]
-        plugs = self.plugs_by_sdk.get(sdk_name)
-        if plugs:
-            return sdk_name, list(plugs)
-        known_sdks = ", ".join(sorted(self.plugs_by_sdk))
-        raise ValueError(
-            f"unknown plugs for SDK '{sdk_name}'; known SDKs: {known_sdks} "
-            "(or pass sdk:plug)"
-        )
-
-
-SDK_KNOWLEDGE = SDKKnowledge(
-    {
-        "opencode": ["opencode-config", "opencode-data"],
-        "skills": ["skills"],
-    }
-)
+from .sdk import MANAGED_SDKS
 
 
 @dataclass(frozen=True)
@@ -41,7 +17,17 @@ class RemountOperation:
 
 
 def resolve_sdk_plugs(spec: str) -> tuple[str, list[str]]:
-    return SDK_KNOWLEDGE.resolve(spec)
+    sdk_name, separator, plug = spec.partition(":")
+    if separator:
+        return sdk_name, [plug]
+    managed = MANAGED_SDKS.get(sdk_name)
+    if managed:
+        return sdk_name, list(managed.plugs)
+    known_sdks = ", ".join(sorted(MANAGED_SDKS))
+    raise ValueError(
+        f"unknown plugs for SDK '{sdk_name}'; known SDKs: {known_sdks} "
+        "(or pass sdk:plug)"
+    )
 
 
 def plan_remount_operations(

@@ -7,8 +7,9 @@ The YAML file Shopkeep writes under `.workshop/<name>.yaml`, naming the base
 image and the SDKs to install.
 
 **Managed SDK**
-A Store SDK whose canonical channel and plugs Shopkeep knows about
-(`opencode`, `skills`). Shopkeep remounts its plugs by default.
+A Store SDK whose default channel and plugs Shopkeep knows about
+(`opencode`, `skills`). An explicit channel overrides the default, and
+Shopkeep remounts the SDK's plugs by default.
 
 **Pass-through SDK**
 An SDK name Shopkeep writes into the definition without knowing its plugs or

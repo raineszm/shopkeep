@@ -9,7 +9,6 @@ from shopkeep import app
 from shopkeep.app import create_app
 from shopkeep.remount import (
     RemountOperation,
-    SDKKnowledge,
     execute_remount_operations,
     mount_source,
     plan_remount_operations,
@@ -20,34 +19,18 @@ from shopkeep.remount import (
 runner = CliRunner()
 
 
-def test_sdk_knowledge_resolves_a_known_sdk_in_configured_order() -> None:
-    knowledge = SDKKnowledge({"editor": ["settings", "state"]})
-
-    assert knowledge.resolve("editor") == ("editor", ["settings", "state"])
-
-
-def test_sdk_knowledge_does_not_expose_its_configured_plugs_for_mutation() -> None:
-    knowledge = SDKKnowledge({"editor": ["settings"]})
-    _, plugs = knowledge.resolve("editor")
-    plugs.append("state")
-
-    assert knowledge.resolve("editor") == ("editor", ["settings"])
+def test_resolve_sdk_plugs_expands_a_managed_sdk_in_configured_order() -> None:
+    assert resolve_sdk_plugs("opencode") == (
+        "opencode",
+        ["opencode-config", "opencode-data"],
+    )
 
 
-def test_sdk_knowledge_resolves_an_explicit_custom_plug() -> None:
-    knowledge = SDKKnowledge({"editor": ["settings"]})
+def test_resolve_sdk_plugs_does_not_expose_registry_plugs_for_mutation() -> None:
+    _, plugs = resolve_sdk_plugs("skills")
+    plugs.append("extra")
 
-    assert knowledge.resolve("custom-sdk:cache") == ("custom-sdk", ["cache"])
-
-
-def test_sdk_knowledge_lists_its_known_sdks_for_an_unknown_sdk() -> None:
-    knowledge = SDKKnowledge({"editor": ["settings"], "skills": ["skills"]})
-
-    with pytest.raises(
-        ValueError,
-        match="unknown plugs for SDK 'unknown'; known SDKs: editor, skills",
-    ):
-        knowledge.resolve("unknown")
+    assert resolve_sdk_plugs("skills") == ("skills", ["skills"])
 
 
 def test_remount_command_uses_injected_executor(tmp_path: Path, monkeypatch) -> None:

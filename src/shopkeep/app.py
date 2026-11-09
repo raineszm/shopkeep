@@ -19,12 +19,10 @@ from .sign import (
     run_git,
     signing_commands,
 )
+from .sdk import canonicalize_sdk_specs, managed_sdk_names
 from .setup import (
-    managed_sdk_names,
-    parse_sdk_spec,
     run_workshop_launch,
     setup_definition,
-    unique_sdk_names,
     validate_workshop_name,
 )
 
@@ -166,9 +164,7 @@ def create_app(
         ] = False,
     ) -> None:
         try:
-            sdk = unique_sdk_names(sdk)
-            for spec in sdk:
-                parse_sdk_spec(spec)
+            specs = canonicalize_sdk_specs(sdk)
             validate_workshop_name(workshop)
             identity = identity_resolver(Path.cwd(), git_name, git_email)
             setup_definition(Path.cwd(), workshop, source, sdk)
@@ -183,7 +179,7 @@ def create_app(
                 )
                 raise typer.Exit(code=1) from error
             if not no_remount:
-                remount(workshop, managed_sdk_names(sdk), executor=executor)
+                remount(workshop, managed_sdk_names(specs), executor=executor)
         except subprocess.CalledProcessError as error:
             typer.echo("error: workshop setup failed", err=True)
             raise typer.Exit(code=1) from error

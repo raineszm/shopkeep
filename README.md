@@ -45,15 +45,22 @@ remounts.
 Shopkeep supports these SDK declarations when they are absent from the source
 definition:
 
-| SDK | Channel | Remounted plugs |
+| SDK | Default channel | Remounted plugs |
 | --- | --- | --- |
 | `opencode` | `2/stable` | `opencode-config`, `opencode-data` |
 | `skills` | `latest/edge` | `skills` |
 
-`opencode` and `skills` are Shopkeep-managed SDKs: Shopkeep uses their canonical
+`opencode` and `skills` are Shopkeep-managed SDKs: Shopkeep uses their default
 channels and remounts their plugs automatically, even when the name is given
-without a channel. Other SDKs are pass-through SDKs: Shopkeep writes the
-requested SDK into the generated definition and does not remount it.
+without a channel. Pass an explicit channel to override the default; the plugs
+are still remounted:
+
+```bash
+shopkeep setup --workshop dev --sdk skills/candidate
+```
+
+Other SDKs are pass-through SDKs: Shopkeep writes the requested SDK into the
+generated definition and does not remount it.
 
 A pass-through SDK with a channel uses a Workshop-style `<name>/<channel>`
 specification. Shopkeep preserves the requested name and channel, and only the

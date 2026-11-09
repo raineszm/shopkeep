@@ -511,7 +511,7 @@ def test_setup_command_remounts_managed_sdk_with_a_source_selected_pass_through_
     assert calls == [RemountOperation("dev", "skills", "skills")]
     assert (tmp_path / ".workshop" / "dev.yaml").read_text(encoding="utf-8") == (
         "name: dev\nsdks:\n  - name: custom\n    channel: latest/edge\n"
-        "  - name: skills\n    channel: latest/edge\n  - name: project-shopkeep\n"
+        "  - name: skills\n    channel: candidate\n  - name: project-shopkeep\n"
     )
 
 
@@ -534,6 +534,40 @@ def test_setup_command_rejects_invalid_sdk_before_writing_definition(
     assert not (tmp_path / ".workshop" / "dev.yaml").exists()
 
 
+def test_setup_command_rejects_conflicting_managed_sdk_channels_before_side_effects(
+    tmp_path: Path, monkeypatch
+) -> None:
+    (tmp_path / ".git" / "info").mkdir(parents=True)
+    monkeypatch.chdir(tmp_path)
+    resolved: list[Path] = []
+
+    def record_resolution(
+        project_root: Path, name: str | None, email: str | None
+    ) -> GitIdentity:
+        resolved.append(project_root)
+        return GitIdentity("Test User", "test@example.com")
+
+    result = runner.invoke(
+        build_test_app(identity_resolver=record_resolution),
+        [
+            "setup",
+            "--workshop",
+            "dev",
+            "--sdk",
+            "skills/candidate",
+            "--sdk",
+            "skills/other",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert result.stderr == (
+        "error: SDK 'skills' has conflicting channels: candidate, other\n"
+    )
+    assert resolved == []
+    assert not (tmp_path / ".workshop" / "dev.yaml").exists()
+
+
 @pytest.mark.parametrize("with_source", [False, True])
 def test_setup_command_rejects_an_empty_sdk_name_before_writing_definition(
     tmp_path: Path, monkeypatch, with_source: bool
@@ -553,7 +587,7 @@ def test_setup_command_rejects_an_empty_sdk_name_before_writing_definition(
     assert not (tmp_path / ".workshop" / "dev.yaml").exists()
 
 
-def test_setup_command_uses_a_managed_sdks_canonical_channel(
+def test_setup_command_uses_an_explicit_channel_for_a_managed_sdk(
     tmp_path: Path, monkeypatch
 ) -> None:
     (tmp_path / ".git" / "info").mkdir(parents=True)
@@ -567,11 +601,11 @@ def test_setup_command_uses_a_managed_sdks_canonical_channel(
     assert result.exit_code == 0
     assert (tmp_path / ".workshop" / "dev.yaml").read_text(encoding="utf-8") == (
         "name: dev\nbase: ubuntu@26.04\nsdks:\n  - name: skills\n"
-        "    channel: latest/edge\n  - name: project-shopkeep\n"
+        "    channel: candidate\n  - name: project-shopkeep\n"
     )
 
 
-def test_setup_command_remounts_a_managed_sdk_once_for_equivalent_specifications(
+def test_setup_command_collapses_bare_and_explicit_managed_specs(
     tmp_path: Path, monkeypatch
 ) -> None:
     (tmp_path / ".git" / "info").mkdir(parents=True)
@@ -593,6 +627,10 @@ def test_setup_command_remounts_a_managed_sdk_once_for_equivalent_specifications
 
     assert result.exit_code == 0
     assert calls == [RemountOperation("dev", "skills", "skills")]
+    assert (tmp_path / ".workshop" / "dev.yaml").read_text(encoding="utf-8") == (
+        "name: dev\nbase: ubuntu@26.04\nsdks:\n  - name: skills\n"
+        "    channel: candidate\n  - name: project-shopkeep\n"
+    )
 
 
 def test_setup_command_skips_remount_with_no_remount(

@@ -1,14 +1,11 @@
 from pathlib import Path
-from dataclasses import dataclass
 import json
 import re
 import subprocess
 
+from .sdk import SDKSpec, canonicalize_sdk_specs
 
-SDK_DECLARATIONS = {
-    "opencode": {"channel": "2/stable"},
-    "skills": {"channel": "latest/edge"},
-}
+
 DEFAULT_DEFINITION = "base: ubuntu@26.04\nsdks: []\n"
 SHOPKEEP_SDK_NAME = "shopkeep"
 SHOPKEEP_SDK_REFERENCE = "project-shopkeep"
@@ -21,13 +18,6 @@ SHOPKEEP_SDK_MANIFEST = (
 )
 
 
-@dataclass(frozen=True)
-class SDKSpec:
-    name: str
-    channel: str | None
-    managed: bool
-
-
 def run_workshop_launch(workshop: str) -> None:
     subprocess.run(["workshop", "launch", workshop], check=True)
 
@@ -36,10 +26,9 @@ def setup_definition(
     project_root: Path, workshop: str, source: Path | None, sdk_specs: list[str]
 ) -> Path:
     validate_workshop_name(workshop)
-    sdk_specs = unique_sdk_names(sdk_specs)
-    sdk_declarations = [parse_sdk_spec(spec) for spec in sdk_specs]
+    sdk_declarations = canonicalize_sdk_specs(sdk_specs)
     if not any(sdk.name == SHOPKEEP_SDK_REFERENCE for sdk in sdk_declarations):
-        sdk_declarations.append(SDKSpec(SHOPKEEP_SDK_REFERENCE, None, False))
+        sdk_declarations.append(SDKSpec(SHOPKEEP_SDK_REFERENCE, None, None))
     if source is None:
         definition = DEFAULT_DEFINITION
     else:
@@ -93,34 +82,6 @@ def write_project_shopkeep_sdk(project_root: Path) -> Path:
     return manifest
 
 
-def unique_sdk_names(sdk_names: list[str]) -> list[str]:
-    return list(dict.fromkeys(sdk_names))
-
-
-def parse_sdk_spec(spec: str) -> SDKSpec:
-    name, separator, channel = spec.partition("/")
-    if not name or name.isspace():
-        raise ValueError("SDK name must not be empty")
-    if separator:
-        if not channel or channel.isspace():
-            raise ValueError("SDK channel must not be empty")
-    known = SDK_DECLARATIONS.get(name)
-    if known:
-        return SDKSpec(name, known["channel"], True)
-    if separator:
-        return SDKSpec(name, channel, False)
-    return SDKSpec(name, None, False)
-
-
-def managed_sdk_names(sdk_specs: list[str]) -> list[str]:
-    names: list[str] = []
-    for spec in sdk_specs:
-        sdk = parse_sdk_spec(spec)
-        if sdk.managed and sdk.name not in names:
-            names.append(sdk.name)
-    return names
-
-
 def validate_workshop_name(workshop: str) -> None:
     if not workshop:
         raise ValueError("workshop name must not be empty")
@@ -166,7 +127,11 @@ def add_missing_sdks(definition: str, sdk_declarations: list[SDKSpec]) -> str:
         definition = f"{definition.rstrip()}\nsdks:\n"
     declarations = "".join(
         f"  - name: {yaml_scalar(sdk.name)}\n"
-        + (f"    channel: {yaml_scalar(sdk.channel)}\n" if sdk.channel else "")
+        + (
+            f"    channel: {yaml_scalar(sdk.definition_channel)}\n"
+            if sdk.definition_channel
+            else ""
+        )
         for sdk in missing
     )
     if not sdks_match:
