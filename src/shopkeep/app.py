@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Annotated
 
 from .remount import RemountOperation, remount, run_workshop_remount
-from .herdr import herdr_connect
+from .herdr import herdr_connect, herdr_disconnect
 from .identity import GitIdentity, resolve_git_identity, seed_git_identity
 from .sign import (
     GitRunner,
@@ -33,6 +33,7 @@ def create_app(
     executor: Callable[[RemountOperation, Path], None] = run_workshop_remount,
     launcher: Callable[[str], None] = run_workshop_launch,
     connector: Callable[[str], None] = herdr_connect,
+    disconnector: Callable[[str], None] = herdr_disconnect,
     identity_resolver: Callable[
         [Path, str | None, str | None], GitIdentity
     ] = resolve_git_identity,
@@ -190,7 +191,10 @@ def create_app(
             typer.echo(f"error: {error}", err=True)
             raise typer.Exit(code=2) from error
 
-    @app.command(name="herdr-connect")
+    herdr_app = typer.Typer(help="Manage Workshop entries in Herdr.")
+    app.add_typer(herdr_app, name="herdr")
+
+    @herdr_app.command(name="connect")
     def herdr_connect_command(
         workshop: Annotated[str, typer.Option("--workshop", help="Workshop name")],
     ) -> None:
@@ -198,6 +202,19 @@ def create_app(
             connector(workshop)
         except subprocess.CalledProcessError as error:
             typer.echo("error: herdr machine add failed", err=True)
+            raise typer.Exit(code=1) from error
+        except ValueError as error:
+            typer.echo(f"error: {error}", err=True)
+            raise typer.Exit(code=2) from error
+
+    @herdr_app.command(name="disconnect")
+    def herdr_disconnect_command(
+        workshop: Annotated[str, typer.Option("--workshop", help="Workshop name")],
+    ) -> None:
+        try:
+            disconnector(workshop)
+        except subprocess.CalledProcessError as error:
+            typer.echo("error: herdr machine remove failed", err=True)
             raise typer.Exit(code=1) from error
         except ValueError as error:
             typer.echo(f"error: {error}", err=True)

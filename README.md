@@ -149,7 +149,7 @@ Register a running Workshop as a [Herdr](https://herdr.dev/) machine, so Herdr
 can control terminals inside it:
 
 ```bash
-shopkeep herdr-connect --workshop dev
+shopkeep herdr connect --workshop dev
 ```
 
 This reads the Workshop's `.wp` hostname from `workshop info` and runs `herdr machine add workshop@<workshop>.<project>.wp --label <workshop>.<project>`. It
@@ -157,3 +157,14 @@ relies on Workshop's built-in SSH certificate authority (0.9.5+), so no SSH
 key import or `authorized_keys` setup is needed — the target Workshop just
 needs to be running. Workshops launched before 0.9.5 must be removed and
 relaunched to pick up the automatic SSH configuration first.
+
+To remove the Workshop's saved Herdr machine again, run:
+
+```bash
+shopkeep herdr disconnect --workshop dev
+```
+
+This resolves the same label from `workshop info`, finds the machine's opaque
+profile ID with `herdr machine list --json`, and runs
+`herdr machine remove <profile-id>`. Removing the machine disconnects it from
+Herdr but leaves its remote sessions and agents running.
