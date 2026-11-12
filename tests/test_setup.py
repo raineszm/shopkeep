@@ -8,7 +8,11 @@ from typer.testing import CliRunner
 from shopkeep.app import create_app
 from shopkeep.identity import GitIdentity
 from shopkeep.remount import RemountOperation, run_workshop_remount
-from shopkeep.setup import run_workshop_launch, setup_definition
+from shopkeep.setup import (
+    run_workshop_launch,
+    setup_definition,
+    validate_project_shopkeep_sdk,
+)
 
 
 runner = CliRunner()
@@ -22,6 +26,10 @@ def ignore_identity_seed(_: str, __: GitIdentity) -> None:
     pass
 
 
+def ignore_config_seed(_: str) -> None:
+    pass
+
+
 def build_test_app(
     executor: Callable[[RemountOperation, Path], None] = run_workshop_remount,
     launcher: Callable[[str], None] = run_workshop_launch,
@@ -30,12 +38,14 @@ def build_test_app(
         [Path, str | None, str | None], GitIdentity
     ] = resolve_test_identity,
     identity_seeder: Callable[[str, GitIdentity], None] = ignore_identity_seed,
+    config_seeder: Callable[[str], None] = ignore_config_seed,
 ):
     return create_app(
         executor=executor,
         launcher=launcher,
         identity_resolver=identity_resolver,
         identity_seeder=identity_seeder,
+        config_seeder=config_seeder,
     )
 
 
@@ -69,6 +79,9 @@ def test_setup_definition_writes_the_project_shopkeep_sdk_manifest(
         "  git-config:\n"
         "    interface: mount\n"
         "    workshop-target: /home/workshop/.config/git\n"
+        "  herdr-config:\n"
+        "    interface: mount\n"
+        "    workshop-target: /home/workshop/.config/herdr\n"
     )
 
 
@@ -233,6 +246,55 @@ def test_setup_definition_adds_sdk_before_a_later_top_level_section(
     )
 
 
+def test_validate_project_shopkeep_sdk_accepts_a_legacy_manifest_without_writing(
+    tmp_path: Path,
+) -> None:
+    manifest = tmp_path / ".workshop" / "shopkeep" / "sdk.yaml"
+    manifest.parent.mkdir(parents=True)
+    legacy = (
+        "name: shopkeep\n"
+        "plugs:\n"
+        "  git-config:\n"
+        "    interface: mount\n"
+        "    workshop-target: /home/workshop/.config/git\n"
+    )
+    manifest.write_text(legacy, encoding="utf-8")
+
+    validate_project_shopkeep_sdk(tmp_path)
+
+    assert manifest.read_text(encoding="utf-8") == legacy
+
+
+def test_setup_definition_upgrades_a_legacy_project_shopkeep_sdk_manifest(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / ".git" / "info").mkdir(parents=True)
+    manifest = tmp_path / ".workshop" / "shopkeep" / "sdk.yaml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        "name: shopkeep\n"
+        "plugs:\n"
+        "  git-config:\n"
+        "    interface: mount\n"
+        "    workshop-target: /home/workshop/.config/git\n",
+        encoding="utf-8",
+    )
+
+    setup_definition(tmp_path, "dev", None, [])
+
+    assert manifest.read_text(encoding="utf-8") == (
+        "name: shopkeep\n"
+        "plugs:\n"
+        "  git-config:\n"
+        "    interface: mount\n"
+        "    workshop-target: /home/workshop/.config/git\n"
+        "  herdr-config:\n"
+        "    interface: mount\n"
+        "    workshop-target: /home/workshop/.config/herdr\n"
+    )
+    assert (tmp_path / ".workshop" / "dev.yaml").exists()
+
+
 def test_setup_definition_refuses_to_overwrite_a_different_shopkeep_sdk(
     tmp_path: Path,
 ) -> None:
@@ -241,7 +303,13 @@ def test_setup_definition_refuses_to_overwrite_a_different_shopkeep_sdk(
     manifest.parent.mkdir(parents=True)
     manifest.write_text("name: custom\n", encoding="utf-8")
 
-    with pytest.raises(ValueError, match="different content"):
+    with pytest.raises(
+        ValueError,
+        match=(
+            "workshop SDK already exists with different content: "
+            ".workshop/shopkeep/sdk.yaml"
+        ),
+    ):
         setup_definition(tmp_path, "dev", None, [])
 
     assert manifest.read_text(encoding="utf-8") == "name: custom\n"
@@ -322,6 +390,112 @@ def test_setup_definition_rejects_a_traversing_workshop_name(tmp_path: Path) -> 
         raise AssertionError("expected an invalid workshop name to be rejected")
 
     assert not (tmp_path / "outside.yaml").exists()
+
+
+def test_upgrade_command_rewrites_a_legacy_manifest_and_preserves_the_definition(
+    tmp_path: Path, monkeypatch
+) -> None:
+    (tmp_path / ".git" / "info").mkdir(parents=True)
+    definition = tmp_path / ".workshop" / "dev.yaml"
+    definition.parent.mkdir(parents=True)
+    definition.write_text("name: dev\nbase: ubuntu@26.04\nsdks: []\n", encoding="utf-8")
+    manifest = tmp_path / ".workshop" / "shopkeep" / "sdk.yaml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        "name: shopkeep\n"
+        "plugs:\n"
+        "  git-config:\n"
+        "    interface: mount\n"
+        "    workshop-target: /home/workshop/.config/git\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(build_test_app(), ["upgrade"])
+
+    assert result.exit_code == 0
+    assert manifest.read_text(encoding="utf-8") == (
+        "name: shopkeep\n"
+        "plugs:\n"
+        "  git-config:\n"
+        "    interface: mount\n"
+        "    workshop-target: /home/workshop/.config/git\n"
+        "  herdr-config:\n"
+        "    interface: mount\n"
+        "    workshop-target: /home/workshop/.config/herdr\n"
+    )
+    assert definition.read_text(encoding="utf-8") == (
+        "name: dev\nbase: ubuntu@26.04\nsdks: []\n"
+    )
+
+
+def test_upgrade_command_leaves_the_current_manifest_unchanged(
+    tmp_path: Path, monkeypatch
+) -> None:
+    (tmp_path / ".git" / "info").mkdir(parents=True)
+    manifest = tmp_path / ".workshop" / "shopkeep" / "sdk.yaml"
+    manifest.parent.mkdir(parents=True)
+    current = (
+        "name: shopkeep\n"
+        "plugs:\n"
+        "  git-config:\n"
+        "    interface: mount\n"
+        "    workshop-target: /home/workshop/.config/git\n"
+        "  herdr-config:\n"
+        "    interface: mount\n"
+        "    workshop-target: /home/workshop/.config/herdr\n"
+    )
+    manifest.write_text(current, encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(build_test_app(), ["upgrade"])
+
+    assert result.exit_code == 0
+    assert manifest.read_text(encoding="utf-8") == current
+
+
+def test_upgrade_command_creates_a_missing_manifest(
+    tmp_path: Path, monkeypatch
+) -> None:
+    (tmp_path / ".git" / "info").mkdir(parents=True)
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(build_test_app(), ["upgrade"])
+
+    assert result.exit_code == 0
+    assert (tmp_path / ".workshop" / "shopkeep" / "sdk.yaml").read_text(
+        encoding="utf-8"
+    ) == (
+        "name: shopkeep\n"
+        "plugs:\n"
+        "  git-config:\n"
+        "    interface: mount\n"
+        "    workshop-target: /home/workshop/.config/git\n"
+        "  herdr-config:\n"
+        "    interface: mount\n"
+        "    workshop-target: /home/workshop/.config/herdr\n"
+    )
+    assert (tmp_path / ".git" / "info" / "exclude").read_text(encoding="utf-8") == (
+        ".workshop/shopkeep/\n.workshop.lock\n"
+    )
+
+
+def test_upgrade_command_rejects_foreign_manifest_content(
+    tmp_path: Path, monkeypatch
+) -> None:
+    manifest = tmp_path / ".workshop" / "shopkeep" / "sdk.yaml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text("name: custom\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(build_test_app(), ["upgrade"])
+
+    assert result.exit_code == 2
+    assert result.stderr == (
+        "error: workshop SDK already exists with different content: "
+        ".workshop/shopkeep/sdk.yaml\n"
+    )
+    assert manifest.read_text(encoding="utf-8") == "name: custom\n"
 
 
 def test_setup_command_remounts_requested_sdk_after_writing_definition(
@@ -755,6 +929,94 @@ def test_setup_command_seeds_identity_with_no_remount(
 
     assert result.exit_code == 0
     assert seeds == [("dev", GitIdentity("Test User", "test@example.com"))]
+
+
+def test_setup_command_seeds_herdr_config_after_identity(
+    tmp_path: Path, monkeypatch
+) -> None:
+    (tmp_path / ".git" / "info").mkdir(parents=True)
+    monkeypatch.chdir(tmp_path)
+    events: list[tuple[str, str]] = []
+
+    def record_identity(workshop: str, _: GitIdentity) -> None:
+        events.append(("identity", workshop))
+
+    def record_config(workshop: str) -> None:
+        events.append(("config", workshop))
+
+    def record_remount(operation: RemountOperation, _: Path) -> None:
+        events.append(("remount", operation.workshop))
+
+    result = runner.invoke(
+        build_test_app(
+            record_remount,
+            lambda _: None,
+            identity_seeder=record_identity,
+            config_seeder=record_config,
+        ),
+        ["setup", "--workshop", "dev", "--sdk", "skills"],
+    )
+
+    assert result.exit_code == 0
+    assert events == [
+        ("identity", "dev"),
+        ("config", "dev"),
+        ("remount", "dev"),
+    ]
+
+
+def test_setup_command_seeds_herdr_config_with_no_remount(
+    tmp_path: Path, monkeypatch
+) -> None:
+    (tmp_path / ".git" / "info").mkdir(parents=True)
+    monkeypatch.chdir(tmp_path)
+    seeds: list[str] = []
+    remounts: list[RemountOperation] = []
+
+    def record_config(workshop: str) -> None:
+        seeds.append(workshop)
+
+    def record_remount(operation: RemountOperation, _: Path) -> None:
+        remounts.append(operation)
+
+    result = runner.invoke(
+        build_test_app(
+            record_remount,
+            lambda _: None,
+            config_seeder=record_config,
+        ),
+        ["setup", "--workshop", "dev", "--sdk", "skills", "--no-remount"],
+    )
+
+    assert result.exit_code == 0
+    assert seeds == ["dev"]
+    assert remounts == []
+
+
+def test_setup_command_reports_herdr_config_seed_failure(
+    tmp_path: Path, monkeypatch
+) -> None:
+    (tmp_path / ".git" / "info").mkdir(parents=True)
+    monkeypatch.chdir(tmp_path)
+
+    def fail_seed(workshop: str) -> None:
+        raise subprocess.CalledProcessError(1, ["workshop", "exec", workshop])
+
+    result = runner.invoke(
+        build_test_app(
+            lambda _operation, _source: None,
+            lambda _: None,
+            config_seeder=fail_seed,
+        ),
+        ["setup", "--workshop", "dev", "--sdk", "skills"],
+    )
+
+    assert result.exit_code == 1
+    assert result.stderr == (
+        "error: workshop launched but herdr config was not applied; "
+        "run `shopkeep herdr connect --workshop dev`\n"
+    )
+    assert (tmp_path / ".workshop" / "dev.yaml").exists()
 
 
 def test_setup_command_rejects_missing_identity_before_writing(

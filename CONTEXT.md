@@ -21,14 +21,32 @@ a host directory.
 
 **`project-shopkeep`**
 The local, ignored in-project SDK Shopkeep generates at
-`.workshop/shopkeep/sdk.yaml`. It provides the mount plug that carries the
-workshop git config at `/home/workshop/.config/git`.
+`.workshop/shopkeep/sdk.yaml`. It provides the mount plugs that carry the
+workshop git config at `/home/workshop/.config/git` and the herdr config at
+`/home/workshop/.config/herdr`.
+
+**Legacy `project-shopkeep` manifest**
+The previous one-plug form of the generated SDK manifest, containing only the
+`git-config` mount. `shopkeep upgrade` recognizes it by exact content and
+rewrites it to the current two-plug form.
+
+**`shopkeep upgrade`**
+The project SDK upgrade command. It rewrites a legacy one-plug
+`project-shopkeep` manifest in place, creates a missing manifest, and leaves
+the workshop definition untouched; any other manifest content is refused.
 
 **Workshop git identity**
 The developer name and email that commits authored inside the workshop use.
 Resolved from the effective git config at the project root, or from
 `--git-name` / `--git-email`, and written into the workshop with signing
 disabled.
+
+**Herdr config**
+The Shopkeep-owned `config.toml` at
+`/home/workshop/.config/herdr/config.toml` that starts new Herdr panes as
+login shells in `/project`, so panes see the same SDK environment as
+`workshop shell`. Delivered through the `project-shopkeep` mount and seeded by
+`shopkeep setup` and `shopkeep herdr connect`, which overwrite manual edits.
 
 **Review pass**
 The human step outside the workshop: inspect the unsigned commits before

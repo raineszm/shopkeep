@@ -2,10 +2,15 @@ import typer
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Protocol
 
 from .remount import RemountOperation, remount, run_workshop_remount
-from .herdr import herdr_connect, herdr_disconnect
+from .herdr import (
+    HerdrConfigSeedFailed,
+    herdr_connect,
+    herdr_disconnect,
+    seed_herdr_config,
+)
 from .identity import GitIdentity, resolve_git_identity, seed_git_identity
 from .sign import (
     GitRunner,
@@ -23,19 +28,35 @@ from .sdk import canonicalize_sdk_specs, managed_sdk_names
 from .setup import (
     run_workshop_launch,
     setup_definition,
+    upgrade_project_shopkeep_sdk,
     validate_workshop_name,
 )
+
+
+class HerdrConnector(Protocol):
+    def __call__(
+        self, workshop: str, *, config_seeder: Callable[[str], None]
+    ) -> None: ...
+
+
+def seed_or_exit(seed: Callable[[], None], message: str) -> None:
+    try:
+        seed()
+    except subprocess.CalledProcessError as error:
+        typer.echo(message, err=True)
+        raise typer.Exit(code=1) from error
 
 
 def create_app(
     executor: Callable[[RemountOperation, Path], None] = run_workshop_remount,
     launcher: Callable[[str], None] = run_workshop_launch,
-    connector: Callable[[str], None] = herdr_connect,
+    connector: HerdrConnector = herdr_connect,
     disconnector: Callable[[str], None] = herdr_disconnect,
     identity_resolver: Callable[
         [Path, str | None, str | None], GitIdentity
     ] = resolve_git_identity,
     identity_seeder: Callable[[str, GitIdentity], None] = seed_git_identity,
+    config_seeder: Callable[[str], None] = seed_herdr_config,
     sign_planner: Callable[[Path, str | None], SignPlan] = plan_sign,
     sign_runner: GitRunner = run_git,
 ) -> typer.Typer:
@@ -187,8 +208,8 @@ def create_app(
 
         Without --from, writes a minimal definition at .workshop/<name>.yaml.
         Adds the requested SDKs plus the local project-shopkeep SDK, applies
-        the git identity, and remounts managed SDK plugs unless --no-remount
-        is given.
+        the git identity, seeds the herdr config, and remounts managed SDK
+        plugs unless --no-remount is given.
         """
         try:
             specs = canonicalize_sdk_specs(sdk)
@@ -196,20 +217,35 @@ def create_app(
             identity = identity_resolver(Path.cwd(), git_name, git_email)
             setup_definition(Path.cwd(), workshop, source, sdk)
             launcher(workshop)
-            try:
-                identity_seeder(workshop, identity)
-            except subprocess.CalledProcessError as error:
-                typer.echo(
-                    "error: workshop launched but git identity was not applied; "
-                    f"run `shopkeep git identity --workshop {workshop}`",
-                    err=True,
-                )
-                raise typer.Exit(code=1) from error
+            seed_or_exit(
+                lambda: identity_seeder(workshop, identity),
+                "error: workshop launched but git identity was not applied; "
+                f"run `shopkeep git identity --workshop {workshop}`",
+            )
+            seed_or_exit(
+                lambda: config_seeder(workshop),
+                "error: workshop launched but herdr config was not applied; "
+                f"run `shopkeep herdr connect --workshop {workshop}`",
+            )
             if not no_remount:
                 remount(workshop, managed_sdk_names(specs), executor=executor)
         except subprocess.CalledProcessError as error:
             typer.echo("error: workshop setup failed", err=True)
             raise typer.Exit(code=1) from error
+        except ValueError as error:
+            typer.echo(f"error: {error}", err=True)
+            raise typer.Exit(code=2) from error
+
+    @app.command(name="upgrade")
+    def upgrade_command() -> None:
+        """Upgrade the project-local project-shopkeep SDK manifest in place.
+
+        Rewrites a legacy one-plug manifest to the current two-plug manifest,
+        creates the manifest when it is missing, and leaves the workshop
+        definition untouched.
+        """
+        try:
+            upgrade_project_shopkeep_sdk(Path.cwd())
         except ValueError as error:
             typer.echo(f"error: {error}", err=True)
             raise typer.Exit(code=2) from error
@@ -230,7 +266,10 @@ def create_app(
         `herdr machine add` with the workshop's label.
         """
         try:
-            connector(workshop)
+            connector(workshop, config_seeder=config_seeder)
+        except HerdrConfigSeedFailed as error:
+            typer.echo(f"error: {error}", err=True)
+            raise typer.Exit(code=1) from error
         except subprocess.CalledProcessError as error:
             typer.echo("error: herdr machine add failed", err=True)
             raise typer.Exit(code=1) from error

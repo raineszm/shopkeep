@@ -398,6 +398,7 @@ def test_cli_help_lists_remount_command() -> None:
     )
     assert "remount" in result.stdout
     assert "setup" in result.stdout
+    assert "upgrade" in result.stdout
 
 
 def test_cli_without_a_command_prints_help() -> None:

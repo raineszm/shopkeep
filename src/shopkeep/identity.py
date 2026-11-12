@@ -5,6 +5,10 @@ import json
 import re
 import subprocess
 
+from .workshop import write_workshop_file
+
+GIT_CONFIG_PATH = "~/.config/git/config"
+
 
 @dataclass(frozen=True)
 class GitIdentity:
@@ -74,25 +78,7 @@ def git_config_value(value: str) -> str:
 
 
 def run_workshop_exec(workshop: str, config: str) -> None:
-    subprocess.run(
-        [
-            "workshop",
-            "exec",
-            "--non-interactive",
-            "--uid",
-            "1000",
-            "--gid",
-            "1000",
-            workshop,
-            "--",
-            "bash",
-            "-c",
-            "mkdir -p ~/.config/git && cat > ~/.config/git/config",
-        ],
-        input=config,
-        text=True,
-        check=True,
-    )
+    write_workshop_file(workshop, config, GIT_CONFIG_PATH)
 
 
 def seed_git_identity(

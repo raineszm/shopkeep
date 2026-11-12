@@ -24,9 +24,9 @@ local `project-shopkeep` SDK. To use a custom source definition instead, pass
 shopkeep setup --workshop dev --from .workshop/base.yaml --sdk opencode
 ```
 
-The command writes `.workshop/dev.yaml`, starts the `dev` Workshop, and remounts
-managed SDK plugs by default. After setup completes, start OpenCode in the
-Workshop with:
+The command writes `.workshop/dev.yaml`, starts the `dev` Workshop, seeds the
+workshop git identity and herdr config, and remounts managed SDK plugs by
+default. After setup completes, start OpenCode in the Workshop with:
 
 ```bash
 workshop exec -- opencode --auto
@@ -39,8 +39,8 @@ without remounting SDK plugs:
 shopkeep setup --workshop dev --from .workshop/base.yaml --sdk opencode --no-remount
 ```
 
-`--no-remount` still writes the workshop git identity; it only skips SDK data
-remounts.
+`--no-remount` still writes the workshop git identity and seeds the herdr
+config; it only skips SDK data remounts.
 
 Shopkeep supports these SDK declarations when they are absent from the source
 definition:
@@ -84,8 +84,28 @@ the repository's local `.git/info/exclude`; Shopkeep does not modify the shared
 `.gitignore`.
 
 Shopkeep also generates the local, ignored `project-shopkeep` SDK at
-`.workshop/shopkeep/sdk.yaml`. It provides the persistent mount used for the
-workshop git config; it is not a Store SDK and has no channel.
+`.workshop/shopkeep/sdk.yaml`. It provides the persistent mounts used for the
+workshop git config and herdr config; it is not a Store SDK and has no
+channel.
+
+## Upgrading an existing project
+
+`shopkeep setup` is first-time-only; re-running it on an existing project
+reports `workshop definition already exists`. To upgrade a project's
+`project-shopkeep` SDK manifest in place, run:
+
+```bash
+shopkeep upgrade
+workshop refresh <name>
+shopkeep herdr connect --workshop <name>
+```
+
+`shopkeep upgrade` rewrites a legacy one-plug manifest to the current two-plug
+manifest and leaves `.workshop/<name>.yaml` untouched. An already-current
+manifest is a no-op, a missing manifest is created, and any other content is
+rejected. The manifest directory and `.workshop.lock` are added to the local
+`.git/info/exclude`, matching `setup`, so an upgrade-created manifest stays
+local. The `workshop refresh` applies the new mount to a running Workshop.
 
 ## Git identity inside the workshop
 
@@ -159,11 +179,58 @@ can control terminals inside it:
 shopkeep herdr connect --workshop dev
 ```
 
-This reads the Workshop's `.wp` hostname from `workshop info` and runs `herdr machine add workshop@<workshop>.<project>.wp --label <workshop>.<project>`. It
-relies on Workshop's built-in SSH certificate authority (0.9.5+), so no SSH
-key import or `authorized_keys` setup is needed — the target Workshop just
-needs to be running. Workshops launched before 0.9.5 must be removed and
-relaunched to pick up the automatic SSH configuration first.
+This reads the Workshop's `.wp` hostname from `workshop info`, runs
+`herdr machine add workshop@<workshop>.<project>.wp --label <workshop>.<project>`,
+and then removes older saved machine profiles with the same label. Re-running
+it is safe: each successful connect leaves exactly one profile, so
+`herdr --machine <label>` keeps working, and a failed add leaves the existing
+registration in place. It relies on Workshop's built-in SSH
+certificate authority (0.9.5+), so no SSH key import or `authorized_keys`
+setup is needed — the target Workshop just needs to be running. Workshops
+launched before 0.9.5 must be removed and relaunched to pick up the automatic
+SSH configuration first.
+
+The first connect to a Workshop that has no Herdr binary fails when run
+non-interactively: Herdr installs its remote binary over SSH and needs
+approval in an interactive terminal, so `shopkeep herdr connect` exits with
+`herdr machine add failed`. The failed connect still seeds the Herdr config;
+only the machine registration is missing. Run the underlying command once in
+an interactive terminal and answer `y` at the install prompt:
+
+```bash
+herdr machine add workshop@<workshop>.<project>.wp --label <workshop>.<project>
+```
+
+Herdr then installs the binary and saves the machine. After that one-time
+approval, `shopkeep herdr connect` succeeds non-interactively.
+
+New Herdr panes run login shells in `/project`, so panes and the agents inside
+them see the same SDK environment as `workshop shell`. Workshop delivers that
+environment through `/etc/profile.d/*.sh` and `~/.profile`, which only login
+shells source, while Herdr's Linux default (`terminal.shell_mode = "auto"`)
+starts non-login shells; SDK binaries such as `uv` and variables such as
+`UV_LINK_MODE` were therefore missing from panes.
+
+`shopkeep setup` and `shopkeep herdr connect` write
+`/home/workshop/.config/herdr/config.toml` with:
+
+```toml
+[terminal]
+shell_mode = "login"
+new_cwd = "/project"
+```
+
+The file is delivered through the `herdr-config` mount plug on the generated
+`project-shopkeep` SDK, so it survives `workshop refresh` with no hooks or
+remounts. It is Shopkeep-owned, like the workshop git config: `herdr connect`
+overwrites manual edits, and a fresh `setup` writes the config.
+
+Existing panes keep their old environment; split new panes or restart the
+Workshop-side Herdr server after the first seed. `workshop refresh` keeps the
+config but destroys the Herdr binary, server, panes, and session state — re-run
+`shopkeep herdr connect` afterwards; because the rebuilt container has no Herdr
+binary, that first connect after a refresh needs the same interactive approval
+as above.
 
 To remove the Workshop's saved Herdr machine again, run:
 
@@ -171,7 +238,8 @@ To remove the Workshop's saved Herdr machine again, run:
 shopkeep herdr disconnect --workshop dev
 ```
 
-This resolves the same label from `workshop info`, finds the machine's opaque
+This resolves the same label from `workshop info`, finds every matching
 profile ID with `herdr machine list --json`, and runs
-`herdr machine remove <profile-id>`. Removing the machine disconnects it from
-Herdr but leaves its remote sessions and agents running.
+`herdr machine remove <profile-id>` for each. It therefore also clears out
+duplicates left by earlier versions of `connect`. Removing the machine
+disconnects it from Herdr but leaves its remote sessions and agents running.

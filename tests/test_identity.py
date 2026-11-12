@@ -117,7 +117,7 @@ def test_run_workshop_exec_writes_the_config_through_bash(monkeypatch) -> None:
         calls.append((args, kwargs))
         return subprocess.CompletedProcess(args, 0)
 
-    monkeypatch.setattr("shopkeep.identity.subprocess.run", fake_run)
+    monkeypatch.setattr("shopkeep.workshop.subprocess.run", fake_run)
 
     run_workshop_exec("dev", "[user]\n")
 

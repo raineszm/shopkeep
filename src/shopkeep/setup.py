@@ -9,13 +9,18 @@ from .sdk import SDKSpec, canonicalize_sdk_specs
 DEFAULT_DEFINITION = "base: ubuntu@26.04\nsdks: []\n"
 SHOPKEEP_SDK_NAME = "shopkeep"
 SHOPKEEP_SDK_REFERENCE = "project-shopkeep"
-SHOPKEEP_SDK_MANIFEST = (
-    "name: shopkeep\n"
-    "plugs:\n"
+GIT_CONFIG_PLUG = (
     "  git-config:\n"
     "    interface: mount\n"
     "    workshop-target: /home/workshop/.config/git\n"
 )
+HERDR_CONFIG_PLUG = (
+    "  herdr-config:\n"
+    "    interface: mount\n"
+    "    workshop-target: /home/workshop/.config/herdr\n"
+)
+SHOPKEEP_SDK_MANIFEST = "name: shopkeep\nplugs:\n" + GIT_CONFIG_PLUG + HERDR_CONFIG_PLUG
+LEGACY_SHOPKEEP_SDK_MANIFEST = "name: shopkeep\nplugs:\n" + GIT_CONFIG_PLUG
 
 
 def run_workshop_launch(workshop: str) -> None:
@@ -68,7 +73,8 @@ def validate_project_shopkeep_sdk(project_root: Path) -> None:
     manifest = project_shopkeep_sdk_path(project_root)
     if not manifest.exists():
         return
-    if manifest.read_text(encoding="utf-8") != SHOPKEEP_SDK_MANIFEST:
+    content = manifest.read_text(encoding="utf-8")
+    if content not in (SHOPKEEP_SDK_MANIFEST, LEGACY_SHOPKEEP_SDK_MANIFEST):
         raise ValueError(
             "workshop SDK already exists with different content: "
             f"{manifest.relative_to(project_root)}"
@@ -79,6 +85,15 @@ def write_project_shopkeep_sdk(project_root: Path) -> Path:
     manifest = project_shopkeep_sdk_path(project_root)
     manifest.parent.mkdir(parents=True, exist_ok=True)
     manifest.write_text(SHOPKEEP_SDK_MANIFEST, encoding="utf-8")
+    return manifest
+
+
+def upgrade_project_shopkeep_sdk(project_root: Path) -> Path:
+    validate_project_shopkeep_sdk(project_root)
+    manifest = write_project_shopkeep_sdk(project_root)
+    add_local_excludes(
+        project_root, [f".workshop/{SHOPKEEP_SDK_NAME}/", ".workshop.lock"]
+    )
     return manifest
 
 
