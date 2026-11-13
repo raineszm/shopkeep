@@ -4,6 +4,9 @@ import posixpath
 import subprocess
 
 
+PROJECT_SDK_NAME = "shopkeep"
+PROJECT_SDK_REFERENCE = "project-shopkeep"
+
 WORKSHOP_HOME = "/home/workshop"
 WORKSHOP_UID = 1000
 WORKSHOP_GID = 1000
@@ -66,6 +69,29 @@ HERDR_CONFIG_MOUNT = ConfigMount(
     filename="config.toml",
 )
 CONFIG_MOUNTS = ConfigMounts(git=GIT_CONFIG_MOUNT, herdr=HERDR_CONFIG_MOUNT)
+
+
+def _render_plug(mount: ConfigMount) -> str:
+    return (
+        f"  {mount.plug}:\n"
+        "    interface: mount\n"
+        f"    workshop-target: {mount.workshop_target}\n"
+    )
+
+
+def manifest() -> str:
+    return f"name: {PROJECT_SDK_NAME}\nplugs:\n" + "".join(
+        _render_plug(mount) for mount in CONFIG_MOUNTS
+    )
+
+
+def legacy_manifest() -> str:
+    return f"name: {PROJECT_SDK_NAME}\nplugs:\n" + _render_plug(CONFIG_MOUNTS.git)
+
+
+def is_known_manifest(content: str) -> bool:
+    return content in (manifest(), legacy_manifest())
+
 
 ConfigWriter = Callable[[str, ConfigMount, str], None]
 

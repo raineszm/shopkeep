@@ -8,7 +8,39 @@ from shopkeep.project_sdk import (
     GIT_CONFIG_MOUNT,
     HERDR_CONFIG_MOUNT,
     ConfigMount,
+    is_known_manifest,
+    legacy_manifest,
+    manifest,
     write_config,
+)
+
+
+CURRENT_MANIFEST = (
+    "name: shopkeep\n"
+    "plugs:\n"
+    "  git-config:\n"
+    "    interface: mount\n"
+    "    workshop-target: /home/workshop/.config/git\n"
+    "  herdr-config:\n"
+    "    interface: mount\n"
+    "    workshop-target: /home/workshop/.config/herdr\n"
+)
+LEGACY_MANIFEST = (
+    "name: shopkeep\n"
+    "plugs:\n"
+    "  git-config:\n"
+    "    interface: mount\n"
+    "    workshop-target: /home/workshop/.config/git\n"
+)
+REORDERED_MANIFEST = (
+    "name: shopkeep\n"
+    "plugs:\n"
+    "  herdr-config:\n"
+    "    interface: mount\n"
+    "    workshop-target: /home/workshop/.config/herdr\n"
+    "  git-config:\n"
+    "    interface: mount\n"
+    "    workshop-target: /home/workshop/.config/git\n"
 )
 
 
@@ -91,3 +123,24 @@ def test_write_config_writes_the_mount_destination(monkeypatch) -> None:
             {"input": "[terminal]\n", "text": True, "check": True},
         )
     ]
+
+
+def test_manifest_renders_both_config_plugs() -> None:
+    assert manifest() == CURRENT_MANIFEST
+
+
+def test_legacy_manifest_renders_only_the_git_config_plug() -> None:
+    assert legacy_manifest() == LEGACY_MANIFEST
+
+
+def test_is_known_manifest_accepts_the_current_and_legacy_shapes() -> None:
+    assert is_known_manifest(CURRENT_MANIFEST)
+    assert is_known_manifest(LEGACY_MANIFEST)
+
+
+def test_is_known_manifest_rejects_reordered_plugs() -> None:
+    assert not is_known_manifest(REORDERED_MANIFEST)
+
+
+def test_is_known_manifest_rejects_foreign_content() -> None:
+    assert not is_known_manifest("name: other\nplugs:\n")

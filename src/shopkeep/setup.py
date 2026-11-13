@@ -3,24 +3,16 @@ import json
 import re
 import subprocess
 
+from .project_sdk import (
+    PROJECT_SDK_NAME,
+    PROJECT_SDK_REFERENCE,
+    is_known_manifest,
+    manifest,
+)
 from .sdk import SDKSpec, canonicalize_sdk_specs
 
 
 DEFAULT_DEFINITION = "base: ubuntu@26.04\nsdks: []\n"
-SHOPKEEP_SDK_NAME = "shopkeep"
-SHOPKEEP_SDK_REFERENCE = "project-shopkeep"
-GIT_CONFIG_PLUG = (
-    "  git-config:\n"
-    "    interface: mount\n"
-    "    workshop-target: /home/workshop/.config/git\n"
-)
-HERDR_CONFIG_PLUG = (
-    "  herdr-config:\n"
-    "    interface: mount\n"
-    "    workshop-target: /home/workshop/.config/herdr\n"
-)
-SHOPKEEP_SDK_MANIFEST = "name: shopkeep\nplugs:\n" + GIT_CONFIG_PLUG + HERDR_CONFIG_PLUG
-LEGACY_SHOPKEEP_SDK_MANIFEST = "name: shopkeep\nplugs:\n" + GIT_CONFIG_PLUG
 
 
 def run_workshop_launch(workshop: str) -> None:
@@ -32,8 +24,8 @@ def setup_definition(
 ) -> Path:
     validate_workshop_name(workshop)
     sdk_declarations = canonicalize_sdk_specs(sdk_specs)
-    if not any(sdk.name == SHOPKEEP_SDK_REFERENCE for sdk in sdk_declarations):
-        sdk_declarations.append(SDKSpec(SHOPKEEP_SDK_REFERENCE, None, None))
+    if not any(sdk.name == PROJECT_SDK_REFERENCE for sdk in sdk_declarations):
+        sdk_declarations.append(SDKSpec(PROJECT_SDK_REFERENCE, None, None))
     if source is None:
         definition = DEFAULT_DEFINITION
     else:
@@ -59,42 +51,42 @@ def setup_definition(
         [
             f".workshop/{workshop}.yaml",
             ".workshop.lock",
-            f".workshop/{SHOPKEEP_SDK_NAME}/",
+            f".workshop/{PROJECT_SDK_NAME}/",
         ],
     )
     return target
 
 
 def project_shopkeep_sdk_path(project_root: Path) -> Path:
-    return project_root / ".workshop" / SHOPKEEP_SDK_NAME / "sdk.yaml"
+    return project_root / ".workshop" / PROJECT_SDK_NAME / "sdk.yaml"
 
 
 def validate_project_shopkeep_sdk(project_root: Path) -> None:
-    manifest = project_shopkeep_sdk_path(project_root)
-    if not manifest.exists():
+    path = project_shopkeep_sdk_path(project_root)
+    if not path.exists():
         return
-    content = manifest.read_text(encoding="utf-8")
-    if content not in (SHOPKEEP_SDK_MANIFEST, LEGACY_SHOPKEEP_SDK_MANIFEST):
+    content = path.read_text(encoding="utf-8")
+    if not is_known_manifest(content):
         raise ValueError(
             "workshop SDK already exists with different content: "
-            f"{manifest.relative_to(project_root)}"
+            f"{path.relative_to(project_root)}"
         )
 
 
 def write_project_shopkeep_sdk(project_root: Path) -> Path:
-    manifest = project_shopkeep_sdk_path(project_root)
-    manifest.parent.mkdir(parents=True, exist_ok=True)
-    manifest.write_text(SHOPKEEP_SDK_MANIFEST, encoding="utf-8")
-    return manifest
+    path = project_shopkeep_sdk_path(project_root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(manifest(), encoding="utf-8")
+    return path
 
 
 def upgrade_project_shopkeep_sdk(project_root: Path) -> Path:
     validate_project_shopkeep_sdk(project_root)
-    manifest = write_project_shopkeep_sdk(project_root)
+    path = write_project_shopkeep_sdk(project_root)
     add_local_excludes(
-        project_root, [f".workshop/{SHOPKEEP_SDK_NAME}/", ".workshop.lock"]
+        project_root, [f".workshop/{PROJECT_SDK_NAME}/", ".workshop.lock"]
     )
-    return manifest
+    return path
 
 
 def validate_workshop_name(workshop: str) -> None:
