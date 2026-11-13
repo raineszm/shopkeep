@@ -24,6 +24,14 @@ A Shopkeep-owned file delivered through a `project-shopkeep` plug. It names the
 plug, the mount directory, and the filename, so the plug's workshop target and
 the in-workshop write path are one fact.
 
+**Populated mount source**
+A Shopkeep mount source directory that already contains data. `workshop
+remount` cannot replace a populated source atomically while the workshop runs.
+
+**Remount stop/start cycle**
+Stop the workshop, remount every plug, and start it again. Shopkeep uses it
+whenever a remount source is populated and the workshop is running.
+
 **`project-shopkeep`**
 The local, ignored in-project SDK Shopkeep generates at
 `.workshop/shopkeep/sdk.yaml`. It provides the mount plugs that carry the

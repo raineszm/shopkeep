@@ -4,7 +4,13 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated, Protocol
 
-from .remount import RemountOperation, remount, run_workshop_remount
+from .remount import (
+    DEFAULT_LIFECYCLE,
+    RemountOperation,
+    WorkshopLifecycle,
+    remount,
+    run_workshop_remount,
+)
 from .herdr import (
     HerdrConfigSeedFailed,
     herdr_connect,
@@ -32,6 +38,10 @@ from .setup import (
     validate_workshop_name,
 )
 
+LOCAL_EXCLUDES_SKIPPED = (
+    "local excludes were skipped: no git work tree at the project root"
+)
+
 
 class HerdrConnector(Protocol):
     def __call__(
@@ -50,6 +60,7 @@ def seed_or_exit(seed: Callable[[], None], message: str) -> None:
 def create_app(
     executor: Callable[[RemountOperation, Path], None] = run_workshop_remount,
     launcher: Callable[[str], None] = run_workshop_launch,
+    lifecycle: WorkshopLifecycle = DEFAULT_LIFECYCLE,
     connector: HerdrConnector = herdr_connect,
     disconnector: Callable[[str], None] = herdr_disconnect,
     identity_resolver: Callable[
@@ -178,7 +189,7 @@ def create_app(
         Pass --sdk once per SDK to remount; each SDK's declared plugs are
         pointed at their directories under the profile root.
         """
-        remount(workshop, sdk, profile, executor)
+        remount(workshop, sdk, profile, executor, lifecycle)
 
     @app.command(name="setup")
     def setup_command(
@@ -215,7 +226,9 @@ def create_app(
             specs = canonicalize_sdk_specs(sdk)
             validate_workshop_name(workshop)
             identity = identity_resolver(Path.cwd(), git_name, git_email)
-            setup_definition(Path.cwd(), workshop, source, sdk)
+            setup = setup_definition(Path.cwd(), workshop, source, sdk)
+            if not setup.excludes.git_work_tree:
+                typer.echo(LOCAL_EXCLUDES_SKIPPED)
             launcher(workshop)
             seed_or_exit(
                 lambda: identity_seeder(workshop, identity),
@@ -228,7 +241,12 @@ def create_app(
                 f"run `shopkeep herdr connect --workshop {workshop}`",
             )
             if not no_remount:
-                remount(workshop, managed_sdk_names(specs), executor=executor)
+                remount(
+                    workshop,
+                    managed_sdk_names(specs),
+                    executor=executor,
+                    lifecycle=lifecycle,
+                )
         except subprocess.CalledProcessError as error:
             typer.echo("error: workshop setup failed", err=True)
             raise typer.Exit(code=1) from error
@@ -245,7 +263,9 @@ def create_app(
         definition untouched.
         """
         try:
-            upgrade_project_shopkeep_sdk(Path.cwd())
+            upgrade = upgrade_project_shopkeep_sdk(Path.cwd())
+            if not upgrade.excludes.git_work_tree:
+                typer.echo(LOCAL_EXCLUDES_SKIPPED)
         except ValueError as error:
             typer.echo(f"error: {error}", err=True)
             raise typer.Exit(code=2) from error

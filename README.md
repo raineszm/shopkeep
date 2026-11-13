@@ -26,7 +26,10 @@ shopkeep setup --workshop dev --from .workshop/base.yaml --sdk opencode
 
 The command writes `.workshop/dev.yaml`, starts the `dev` Workshop, seeds the
 workshop git identity and herdr config, and remounts managed SDK plugs by
-default. After setup completes, start OpenCode in the Workshop with:
+default. If a Shopkeep mount source already contains data, Workshop cannot
+remount it while the workshop runs: setup stops the running workshop, remounts
+every plug, and starts it again, which replaces existing panes. After setup
+completes, start OpenCode in the Workshop with:
 
 ```bash
 workshop exec -- opencode --auto

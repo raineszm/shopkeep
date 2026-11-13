@@ -7,10 +7,19 @@ from typer.testing import CliRunner
 
 from shopkeep.app import create_app
 from shopkeep.identity import GitIdentity
-from shopkeep.remount import RemountOperation, run_workshop_remount
+from shopkeep.remount import (
+    DEFAULT_LIFECYCLE,
+    RemountOperation,
+    WorkshopLifecycle,
+    mount_source,
+    run_workshop_remount,
+)
 from shopkeep.setup import (
+    git_exclude_path,
+    is_git_work_tree,
     run_workshop_launch,
     setup_definition,
+    upgrade_project_shopkeep_sdk,
     validate_project_shopkeep_sdk,
 )
 
@@ -34,6 +43,7 @@ def build_test_app(
     executor: Callable[[RemountOperation, Path], None] = run_workshop_remount,
     launcher: Callable[[str], None] = run_workshop_launch,
     *,
+    lifecycle: WorkshopLifecycle = DEFAULT_LIFECYCLE,
     identity_resolver: Callable[
         [Path, str | None, str | None], GitIdentity
     ] = resolve_test_identity,
@@ -43,6 +53,7 @@ def build_test_app(
     return create_app(
         executor=executor,
         launcher=launcher,
+        lifecycle=lifecycle,
         identity_resolver=identity_resolver,
         identity_seeder=identity_seeder,
         config_seeder=config_seeder,
@@ -378,6 +389,68 @@ def test_setup_definition_uses_linked_worktree_exclude_file(tmp_path: Path) -> N
     )
 
 
+def test_setup_definition_reports_the_git_work_tree_it_used_for_excludes(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / ".git" / "info").mkdir(parents=True)
+
+    result = setup_definition(tmp_path, "dev", None, [])
+
+    assert result.definition == tmp_path / ".workshop" / "dev.yaml"
+    assert result.excludes.git_work_tree is True
+
+
+def test_setup_definition_reports_a_project_root_without_a_git_work_tree(
+    tmp_path: Path,
+) -> None:
+    result = setup_definition(tmp_path, "dev", None, [])
+
+    assert result.excludes.git_work_tree is False
+
+
+def test_upgrade_project_shopkeep_sdk_reports_a_project_root_without_a_work_tree(
+    tmp_path: Path,
+) -> None:
+    result = upgrade_project_shopkeep_sdk(tmp_path)
+
+    assert result.manifest == tmp_path / ".workshop" / "shopkeep" / "sdk.yaml"
+    assert result.excludes.git_work_tree is False
+
+
+def test_setup_command_rejects_a_malformed_dot_git_file(
+    tmp_path: Path, monkeypatch
+) -> None:
+    (tmp_path / ".git").write_text("this is not a gitdir pointer\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(
+        build_test_app(lambda _operation, _source: None, lambda _: None),
+        ["setup", "--workshop", "dev"],
+    )
+
+    assert result.exit_code == 0
+    assert "local excludes were skipped: no git work tree at the project root" in (
+        result.stdout
+    )
+    assert not (tmp_path / "this is not a gitdir pointer").exists()
+
+
+def test_is_git_work_tree_rejects_a_malformed_dot_git_file(tmp_path: Path) -> None:
+    (tmp_path / ".git").write_text("garbage\n", encoding="utf-8")
+
+    assert is_git_work_tree(tmp_path) is False
+    assert git_exclude_path(tmp_path) is None
+
+
+def test_is_git_work_tree_accepts_a_gitdir_pointer(tmp_path: Path) -> None:
+    git_dir = tmp_path / "git-common"
+    git_dir.mkdir()
+    (tmp_path / ".git").write_text("gitdir: git-common\n", encoding="utf-8")
+
+    assert is_git_work_tree(tmp_path) is True
+    assert git_exclude_path(tmp_path) == (git_dir / "info" / "exclude").resolve()
+
+
 def test_setup_definition_rejects_a_traversing_workshop_name(tmp_path: Path) -> None:
     source = tmp_path / "source.yaml"
     source.write_text("name: base\n", encoding="utf-8")
@@ -480,6 +553,50 @@ def test_upgrade_command_creates_a_missing_manifest(
     )
 
 
+def test_upgrade_command_skips_local_excludes_outside_a_git_work_tree(
+    tmp_path: Path, monkeypatch
+) -> None:
+    manifest = tmp_path / ".workshop" / "shopkeep" / "sdk.yaml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        "name: shopkeep\n"
+        "plugs:\n"
+        "  git-config:\n"
+        "    interface: mount\n"
+        "    workshop-target: /home/workshop/.config/git\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(build_test_app(), ["upgrade"])
+
+    assert result.exit_code == 0
+    assert "herdr-config:" in manifest.read_text(encoding="utf-8")
+    assert "local excludes were skipped: no git work tree at the project root" in (
+        result.stdout
+    )
+    assert not (tmp_path / ".git").exists()
+
+
+def test_setup_command_writes_local_excludes_without_a_skip_message_in_a_repository(
+    tmp_path: Path, monkeypatch
+) -> None:
+    (tmp_path / ".git" / "info").mkdir(parents=True)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    result = runner.invoke(
+        build_test_app(lambda _operation, _source: None, lambda _: None),
+        ["setup", "--workshop", "dev", "--sdk", "skills"],
+    )
+
+    assert result.exit_code == 0
+    assert "local excludes were skipped" not in result.output
+    assert (tmp_path / ".git" / "info" / "exclude").read_text(encoding="utf-8") == (
+        ".workshop/dev.yaml\n.workshop.lock\n.workshop/shopkeep/\n"
+    )
+
+
 def test_upgrade_command_rejects_foreign_manifest_content(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -526,6 +643,113 @@ def test_setup_command_remounts_requested_sdk_after_writing_definition(
     assert (tmp_path / ".workshop" / "dev.yaml").exists()
 
 
+def test_setup_command_restarts_a_running_workshop_with_populated_sources(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source = tmp_path / "source.yaml"
+    source.write_text("name: base\n", encoding="utf-8")
+    (tmp_path / ".git" / "info").mkdir(parents=True)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    skills_source = mount_source(
+        tmp_path / "data" / "shopkeep", "Work", "skills", "skills"
+    )
+    skills_source.mkdir(parents=True)
+    (skills_source / "marker").write_text("seeded", encoding="utf-8")
+    events: list[tuple[str, ...]] = []
+
+    def record_launch(workshop: str) -> None:
+        events.append(("launch", workshop))
+
+    def record_identity(workshop: str, _: GitIdentity) -> None:
+        events.append(("identity", workshop))
+
+    def record_config(workshop: str) -> None:
+        events.append(("config", workshop))
+
+    def record_status(_: str) -> str:
+        return "Ready"
+
+    def record_stop(workshop: str) -> None:
+        events.append(("stop", workshop))
+
+    def record_start(workshop: str) -> None:
+        events.append(("start", workshop))
+
+    def record_remount(operation: RemountOperation, _: Path) -> None:
+        events.append(("remount", operation.sdk, operation.plug))
+
+    result = runner.invoke(
+        build_test_app(
+            record_remount,
+            record_launch,
+            lifecycle=WorkshopLifecycle(record_status, record_stop, record_start),
+            identity_seeder=record_identity,
+            config_seeder=record_config,
+        ),
+        ["setup", "--workshop", "dev", "--from", str(source), "--sdk", "skills"],
+    )
+
+    assert result.exit_code == 0
+    assert events == [
+        ("launch", "dev"),
+        ("identity", "dev"),
+        ("config", "dev"),
+        ("stop", "dev"),
+        ("remount", "skills", "skills"),
+        ("start", "dev"),
+    ]
+    assert (skills_source / "marker").read_text(encoding="utf-8") == "seeded"
+
+
+def test_setup_command_restarts_once_for_multiple_populated_sdks(
+    tmp_path: Path, monkeypatch
+) -> None:
+    (tmp_path / ".git" / "info").mkdir(parents=True)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    data_root = tmp_path / "data" / "shopkeep"
+    for sdk, plug in (
+        ("opencode", "opencode-config"),
+        ("opencode", "opencode-data"),
+        ("skills", "skills"),
+    ):
+        source = mount_source(data_root, "Work", sdk, plug)
+        source.mkdir(parents=True)
+        (source / "state.json").write_text("{}", encoding="utf-8")
+    events: list[tuple[str, ...]] = []
+
+    def record_remount(operation: RemountOperation, _: Path) -> None:
+        events.append(("remount", operation.sdk, operation.plug))
+
+    def record_status(_: str) -> str:
+        return "Ready"
+
+    def record_stop(workshop: str) -> None:
+        events.append(("stop", workshop))
+
+    def record_start(workshop: str) -> None:
+        events.append(("start", workshop))
+
+    result = runner.invoke(
+        build_test_app(
+            record_remount,
+            lambda _: None,
+            lifecycle=WorkshopLifecycle(record_status, record_stop, record_start),
+        ),
+        ["setup", "--workshop", "dev", "--sdk", "opencode", "--sdk", "skills"],
+    )
+
+    assert result.exit_code == 0
+    assert events == [
+        ("stop", "dev"),
+        ("remount", "opencode", "opencode-config"),
+        ("remount", "opencode", "opencode-data"),
+        ("remount", "skills", "skills"),
+        ("start", "dev"),
+    ]
+
+
 def test_setup_command_uses_the_default_template_without_from(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -553,6 +777,25 @@ def test_setup_command_uses_the_default_template_without_from(
         "name: dev\nbase: ubuntu@26.04\nsdks:\n  - name: skills\n"
         "    channel: latest/edge\n  - name: project-shopkeep\n"
     )
+
+
+def test_setup_command_skips_local_excludes_outside_a_git_work_tree(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(
+        build_test_app(lambda _operation, _source: None, lambda _: None),
+        ["setup", "--workshop", "dev"],
+    )
+
+    assert result.exit_code == 0
+    assert (tmp_path / ".workshop" / "dev.yaml").exists()
+    assert (tmp_path / ".workshop" / "shopkeep" / "sdk.yaml").exists()
+    assert "local excludes were skipped: no git work tree at the project root" in (
+        result.stdout
+    )
+    assert not (tmp_path / ".git").exists()
 
 
 def test_setup_command_skips_remounting_a_pass_through_sdk(

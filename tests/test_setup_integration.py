@@ -21,7 +21,8 @@ import pytest
 from typer.testing import CliRunner
 
 from shopkeep.app import create_app
-from shopkeep.remount import mount_source, resolve_sdk_plugs
+from shopkeep.herdr import render_herdr_config
+from shopkeep.remount import mount_source, parse_workshop_status, resolve_sdk_plugs
 
 pytestmark = [
     pytest.mark.integration,
@@ -44,6 +45,7 @@ REQUESTED_SDKS = ("opencode", "skills")
 DEFAULT_PROFILE = "Work"
 GIT_NAME = "Integration User"
 GIT_EMAIL = "integration@example.com"
+MARKER_FILENAME = "shopkeep-populated-marker.txt"
 
 
 @dataclass(frozen=True)
@@ -54,12 +56,17 @@ class WorkshopProject:
 
 
 def isolated_data_root() -> Path:
-    """Return an empty Shopkeep data root on the Workshop data filesystem.
+    """Return a fresh, initially empty Shopkeep data root on the Workshop data filesystem.
 
     ``workshop remount`` succeeds while the workshop is running only when the
     new source is empty and shares a mounted filesystem with the current
     source. Creating the isolated data root beside the Workshop data keeps that
     invariant without touching the developer's real Shopkeep mounts.
+
+    The root starts empty because most tests deliberately want first-call
+    remounts to swap in empty sources. The populated-sources test seeds the
+    sources under this root before setup; those populated sources are the point
+    of that test, and they exercise the stop/remount/start path instead.
     """
     workshop_data = platformdirs.user_data_path("workshop")
     workshop_data.parent.mkdir(parents=True, exist_ok=True)
@@ -78,20 +85,39 @@ def run_workshop(project: Path, *args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def mount_sources(info: str) -> dict[str, str]:
-    """Extract each mount plug's ``host-source`` from ``workshop info`` output."""
-    sources: dict[str, str] = {}
+def mount_details(info: str) -> dict[str, dict[str, str]]:
+    """Extract each mount plug's host and workshop paths from ``workshop info``."""
+    details: dict[str, dict[str, str]] = {}
     plug: str | None = None
     for line in info.splitlines():
         plug_match = re.fullmatch(r" {6}(\S+):", line)
         if plug_match:
             plug = plug_match.group(1)
+            details[plug] = {}
             continue
-        source_match = re.fullmatch(r" {8}host-source:\s+(\S+)", line)
-        if source_match and plug is not None:
-            # `workshop info` abbreviates paths under $HOME with a leading `~`.
-            sources[plug] = str(Path(source_match.group(1)).expanduser())
-    return sources
+        detail_match = re.fullmatch(r" {8}(host-source|workshop-target):\s+(\S+)", line)
+        if detail_match and plug is not None:
+            details[plug][detail_match.group(1)] = detail_match.group(2)
+    return details
+
+
+def mount_sources(info: str) -> dict[str, str]:
+    """Extract each mount plug's ``host-source`` from ``workshop info`` output."""
+    # `workshop info` abbreviates paths under $HOME with a leading `~`.
+    return {
+        plug: str(Path(details["host-source"]).expanduser())
+        for plug, details in mount_details(info).items()
+        if "host-source" in details
+    }
+
+
+def mount_targets(info: str) -> dict[str, str]:
+    """Extract each mount plug's ``workshop-target`` from ``workshop info`` output."""
+    return {
+        plug: details["workshop-target"]
+        for plug, details in mount_details(info).items()
+        if "workshop-target" in details
+    }
 
 
 def expected_mounts() -> dict[str, str]:
@@ -103,6 +129,22 @@ def expected_mounts() -> dict[str, str]:
         for plug in plugs:
             mounts[plug] = str(mount_source(shopkeep_data, DEFAULT_PROFILE, sdk, plug))
     return mounts
+
+
+def populate_mount_sources(mounts: dict[str, str]) -> dict[str, str]:
+    """Write a marker into every Shopkeep mount source before setup runs.
+
+    Returns the marker content keyed by plug so the test can look for the same
+    bytes inside the workshop after setup has remounted the populated sources.
+    """
+    markers: dict[str, str] = {}
+    for plug, source in mounts.items():
+        directory = Path(source)
+        directory.mkdir(parents=True, exist_ok=True)
+        content = f"pre-populated Shopkeep mount source for {plug}\n"
+        (directory / MARKER_FILENAME).write_text(content, encoding="utf-8")
+        markers[plug] = content
+    return markers
 
 
 def setup_args(workshop_name: str, source: Path | None) -> list[str]:
@@ -308,3 +350,64 @@ def test_setup_bootstraps_the_default_definition_without_a_source(
     )
 
     assert_workshop_is_set_up(workshop_project)
+
+
+def test_setup_remounts_populated_mount_sources(
+    workshop_project: WorkshopProject,
+) -> None:
+    """Setup remounts populated Shopkeep sources and keeps their contents.
+
+    The populated sources are the point of this test: the isolated no-source
+    test deliberately starts with empty sources so first-call remounts can swap
+    them atomically while the workshop runs. Pre-populating every source forces
+    setup through the stop/remount/start path, and the markers written before
+    setup prove the Shopkeep sources really back the plugs afterwards rather
+    than merely being reported by ``workshop info``.
+    """
+    expected = expected_mounts()
+    markers = populate_mount_sources(expected)
+
+    result = runner.invoke(create_app(), setup_args(workshop_project.name, None))
+    assert result.exit_code == 0, result.output
+
+    info = run_workshop(workshop_project.project, "info", workshop_project.name).stdout
+    assert parse_workshop_status(info).lower() == "ready"
+
+    # Setup returned with the workshop Ready after remounting populated
+    # sources, so the stop/start path ran: the atomic path cannot remount a
+    # non-empty source.
+
+    sources = mount_sources(info)
+    for plug, source in expected.items():
+        assert sources.get(plug) == source, f"remounted host source for {plug}"
+
+    targets = mount_targets(info)
+    for plug, marker in markers.items():
+        assert plug in targets, f"workshop target for {plug}"
+        marker_path = f"{targets[plug].rstrip('/')}/{MARKER_FILENAME}"
+        content = run_workshop(
+            workshop_project.project,
+            "exec",
+            workshop_project.name,
+            "--",
+            "cat",
+            marker_path,
+        ).stdout
+        assert content == marker, f"marker delivered through the {plug} mount"
+
+    assert_git_identity_is_set(workshop_project)
+
+    herdr_config = run_workshop(
+        workshop_project.project,
+        "exec",
+        "--uid",
+        "1000",
+        "--gid",
+        "1000",
+        workshop_project.name,
+        "--",
+        "bash",
+        "-lc",
+        "cat ~/.config/herdr/config.toml",
+    ).stdout
+    assert herdr_config == render_herdr_config()

@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from pathlib import Path
 import json
 import re
@@ -15,13 +16,32 @@ from .sdk import SDKSpec, canonicalize_sdk_specs
 DEFAULT_DEFINITION = "base: ubuntu@26.04\nsdks: []\n"
 
 
+@dataclass(frozen=True)
+class LocalExcludes:
+    """Whether a git work tree was found and its local excludes handled."""
+
+    git_work_tree: bool
+
+
+@dataclass(frozen=True)
+class SetupResult:
+    definition: Path
+    excludes: LocalExcludes
+
+
+@dataclass(frozen=True)
+class UpgradeResult:
+    manifest: Path
+    excludes: LocalExcludes
+
+
 def run_workshop_launch(workshop: str) -> None:
     subprocess.run(["workshop", "launch", workshop], check=True)
 
 
 def setup_definition(
     project_root: Path, workshop: str, source: Path | None, sdk_specs: list[str]
-) -> Path:
+) -> SetupResult:
     validate_workshop_name(workshop)
     sdk_declarations = canonicalize_sdk_specs(sdk_specs)
     if not any(sdk.name == PROJECT_SDK_REFERENCE for sdk in sdk_declarations):
@@ -46,7 +66,7 @@ def setup_definition(
         encoding="utf-8",
     )
     write_project_shopkeep_sdk(project_root)
-    add_local_excludes(
+    excludes = add_local_excludes(
         project_root,
         [
             f".workshop/{workshop}.yaml",
@@ -54,7 +74,7 @@ def setup_definition(
             f".workshop/{PROJECT_SDK_NAME}/",
         ],
     )
-    return target
+    return SetupResult(definition=target, excludes=excludes)
 
 
 def project_shopkeep_sdk_path(project_root: Path) -> Path:
@@ -80,13 +100,13 @@ def write_project_shopkeep_sdk(project_root: Path) -> Path:
     return path
 
 
-def upgrade_project_shopkeep_sdk(project_root: Path) -> Path:
+def upgrade_project_shopkeep_sdk(project_root: Path) -> UpgradeResult:
     validate_project_shopkeep_sdk(project_root)
     path = write_project_shopkeep_sdk(project_root)
-    add_local_excludes(
+    excludes = add_local_excludes(
         project_root, [f".workshop/{PROJECT_SDK_NAME}/", ".workshop.lock"]
     )
-    return path
+    return UpgradeResult(manifest=path, excludes=excludes)
 
 
 def validate_workshop_name(workshop: str) -> None:
@@ -168,22 +188,45 @@ def sdk_section_bounds(
     return content_start, insertion
 
 
-def add_local_excludes(project_root: Path, entries: list[str]) -> None:
-    exclude = git_exclude_path(project_root)
-    existing = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
-    missing = [entry for entry in entries if entry not in existing.splitlines()]
-    if not missing:
-        return
-    exclude.parent.mkdir(parents=True, exist_ok=True)
-    separator = "" if not existing or existing.endswith("\n") else "\n"
-    exclude.write_text(
-        existing + separator + "\n".join(missing) + "\n", encoding="utf-8"
-    )
-
-
-def git_exclude_path(project_root: Path) -> Path:
+def git_directory(project_root: Path) -> Path | None:
+    """Return the project root's git directory, or None without a work tree."""
     git_path = project_root / ".git"
     if git_path.is_dir():
-        return git_path / "info" / "exclude"
-    git_dir = git_path.read_text(encoding="utf-8").removeprefix("gitdir: ").strip()
-    return (git_path.parent / git_dir).resolve() / "info" / "exclude"
+        return git_path
+    if not git_path.is_file():
+        return None
+    try:
+        pointer = git_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    prefix, separator, target = pointer.partition("gitdir:")
+    if prefix or not separator or not target.strip():
+        return None
+    directory = (project_root / target.strip()).resolve()
+    return directory if directory.is_dir() else None
+
+
+def is_git_work_tree(project_root: Path) -> bool:
+    return git_directory(project_root) is not None
+
+
+def add_local_excludes(project_root: Path, entries: list[str]) -> LocalExcludes:
+    exclude = git_exclude_path(project_root)
+    if exclude is None:
+        return LocalExcludes(git_work_tree=False)
+    existing = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
+    missing = [entry for entry in entries if entry not in existing.splitlines()]
+    if missing:
+        exclude.parent.mkdir(parents=True, exist_ok=True)
+        separator = "" if not existing or existing.endswith("\n") else "\n"
+        exclude.write_text(
+            existing + separator + "\n".join(missing) + "\n", encoding="utf-8"
+        )
+    return LocalExcludes(git_work_tree=True)
+
+
+def git_exclude_path(project_root: Path) -> Path | None:
+    directory = git_directory(project_root)
+    if directory is None:
+        return None
+    return directory / "info" / "exclude"

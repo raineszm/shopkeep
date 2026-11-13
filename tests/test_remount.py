@@ -9,14 +9,73 @@ from shopkeep import app
 from shopkeep.app import create_app
 from shopkeep.remount import (
     RemountOperation,
+    WorkshopLifecycle,
     execute_remount_operations,
     mount_source,
     plan_remount_operations,
+    remount,
     resolve_sdk_plugs,
 )
 
 
 runner = CliRunner()
+
+
+def noop_lifecycle_action(_: str) -> None:
+    pass
+
+
+class RecordingLifecycle:
+    """A lifecycle stub that records calls into one event log.
+
+    Status reads return each value in order and then keep repeating the last.
+    Set ``status_error`` or ``start_error`` to exercise the failure paths.
+    """
+
+    def __init__(self, *statuses: str) -> None:
+        self.events: list[tuple[str, ...]] = []
+        self.statuses = list(statuses) or ["Ready"]
+        self.status_error: Exception | None = None
+        self.start_error: Exception | None = None
+
+    @property
+    def lifecycle(self) -> WorkshopLifecycle:
+        return WorkshopLifecycle(self.read_status, self.stop, self.start)
+
+    def read_status(self, workshop: str) -> str:
+        self.events.append(("status", workshop))
+        if self.status_error is not None:
+            raise self.status_error
+        if len(self.statuses) > 1:
+            return self.statuses.pop(0)
+        return self.statuses[0]
+
+    def stop(self, workshop: str) -> None:
+        self.events.append(("stop", workshop))
+
+    def start(self, workshop: str) -> None:
+        self.events.append(("start", workshop))
+        if self.start_error is not None:
+            raise self.start_error
+
+
+def test_lifecycle_owns_status_parsing_for_running_states() -> None:
+    lifecycle = WorkshopLifecycle(
+        lambda _: "  READY  \n", noop_lifecycle_action, noop_lifecycle_action
+    )
+
+    assert lifecycle.is_running("hotsos") is True
+
+
+def test_lifecycle_treats_an_unreadable_status_as_not_running() -> None:
+    def fail_status(_: str) -> str:
+        raise subprocess.CalledProcessError(1, ["workshop", "info"])
+
+    lifecycle = WorkshopLifecycle(
+        fail_status, noop_lifecycle_action, noop_lifecycle_action
+    )
+
+    assert lifecycle.is_running("hotsos") is False
 
 
 def test_resolve_sdk_plugs_expands_a_managed_sdk_in_configured_order() -> None:
@@ -156,6 +215,339 @@ def recorded_calls(monkeypatch) -> list[list[str]]:
 
     monkeypatch.setattr(subprocess, "run", record_run)
     return calls
+
+
+def test_remount_command_stops_a_running_workshop_for_populated_sources(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    data_root = tmp_path / "data" / "shopkeep"
+    skills_source = mount_source(data_root, "Work", "skills", "skills")
+    skills_source.mkdir(parents=True)
+    (skills_source / "state.json").write_text("{}", encoding="utf-8")
+    recorded = RecordingLifecycle("Ready")
+
+    def record_execution(operation: RemountOperation, _: Path) -> None:
+        recorded.events.append(("remount", operation.sdk, operation.plug))
+
+    result = runner.invoke(
+        create_app(record_execution, lifecycle=recorded.lifecycle),
+        ["remount", "hotsos", "--sdk", "opencode", "--sdk", "skills"],
+    )
+
+    assert result.exit_code == 0
+    assert recorded.events == [
+        ("status", "hotsos"),
+        ("stop", "hotsos"),
+        ("remount", "opencode", "opencode-config"),
+        ("remount", "opencode", "opencode-data"),
+        ("remount", "skills", "skills"),
+        ("start", "hotsos"),
+        ("status", "hotsos"),
+    ]
+
+
+@pytest.mark.parametrize("status", ["Failed", "Error"])
+def test_remount_command_treats_failed_and_error_statuses_as_not_running(
+    tmp_path: Path, monkeypatch, status: str
+) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    skills_source = mount_source(
+        tmp_path / "data" / "shopkeep", "Work", "skills", "skills"
+    )
+    skills_source.mkdir(parents=True)
+    (skills_source / "state.json").write_text("{}", encoding="utf-8")
+    recorded = RecordingLifecycle(status)
+
+    def record_execution(operation: RemountOperation, _: Path) -> None:
+        recorded.events.append(("remount", operation.sdk, operation.plug))
+
+    result = runner.invoke(
+        create_app(record_execution, lifecycle=recorded.lifecycle),
+        ["remount", "hotsos", "--sdk", "skills"],
+    )
+
+    assert result.exit_code == 0
+    assert recorded.events == [
+        ("status", "hotsos"),
+        ("remount", "skills", "skills"),
+    ]
+
+
+def test_remount_command_keeps_the_atomic_path_when_status_cannot_be_read(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    skills_source = mount_source(
+        tmp_path / "data" / "shopkeep", "Work", "skills", "skills"
+    )
+    skills_source.mkdir(parents=True)
+    (skills_source / "state.json").write_text("{}", encoding="utf-8")
+    recorded = RecordingLifecycle()
+    recorded.status_error = subprocess.CalledProcessError(1, ["workshop", "info"])
+
+    def record_execution(operation: RemountOperation, _: Path) -> None:
+        recorded.events.append(("remount", operation.sdk, operation.plug))
+
+    result = runner.invoke(
+        create_app(record_execution, lifecycle=recorded.lifecycle),
+        ["remount", "hotsos", "--sdk", "skills"],
+    )
+
+    assert result.exit_code == 0
+    assert recorded.events == [
+        ("status", "hotsos"),
+        ("remount", "skills", "skills"),
+    ]
+
+
+def test_remount_command_keeps_the_atomic_path_when_status_is_unparseable(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    skills_source = mount_source(
+        tmp_path / "data" / "shopkeep", "Work", "skills", "skills"
+    )
+    skills_source.mkdir(parents=True)
+    (skills_source / "state.json").write_text("{}", encoding="utf-8")
+    recorded = RecordingLifecycle("")
+
+    def record_execution(operation: RemountOperation, _: Path) -> None:
+        recorded.events.append(("remount", operation.sdk, operation.plug))
+
+    result = runner.invoke(
+        create_app(record_execution, lifecycle=recorded.lifecycle),
+        ["remount", "hotsos", "--sdk", "skills"],
+    )
+
+    assert result.exit_code == 0
+    assert recorded.events == [
+        ("status", "hotsos"),
+        ("remount", "skills", "skills"),
+    ]
+
+
+def test_remount_command_keeps_the_atomic_path_when_sources_are_empty(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    recorded = RecordingLifecycle("Ready")
+
+    def record_execution(operation: RemountOperation, _: Path) -> None:
+        recorded.events.append(("remount", operation.sdk, operation.plug))
+
+    result = runner.invoke(
+        create_app(record_execution, lifecycle=recorded.lifecycle),
+        ["remount", "hotsos", "--sdk", "skills"],
+    )
+
+    assert result.exit_code == 0
+    assert recorded.events == [("remount", "skills", "skills")]
+
+
+@pytest.mark.parametrize("status", ["Stopped", "off"])
+def test_remount_command_remounts_a_stopped_workshop_without_starting_it(
+    tmp_path: Path, monkeypatch, status: str
+) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    data_root = tmp_path / "data" / "shopkeep"
+    skills_source = mount_source(data_root, "Work", "skills", "skills")
+    skills_source.mkdir(parents=True)
+    (skills_source / "state.json").write_text("{}", encoding="utf-8")
+    recorded = RecordingLifecycle(status)
+
+    def record_execution(operation: RemountOperation, _: Path) -> None:
+        recorded.events.append(("remount", operation.sdk, operation.plug))
+
+    result = runner.invoke(
+        create_app(record_execution, lifecycle=recorded.lifecycle),
+        ["remount", "hotsos", "--sdk", "skills"],
+    )
+
+    assert result.exit_code == 0
+    assert recorded.events == [
+        ("status", "hotsos"),
+        ("remount", "skills", "skills"),
+    ]
+
+
+def test_remount_command_starts_the_workshop_after_a_failed_remount(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    data_root = tmp_path / "data" / "shopkeep"
+    skills_source = mount_source(data_root, "Work", "skills", "skills")
+    skills_source.mkdir(parents=True)
+    (skills_source / "state.json").write_text("{}", encoding="utf-8")
+    recorded = RecordingLifecycle("Ready")
+
+    def fail_execution(operation: RemountOperation, _: Path) -> None:
+        recorded.events.append(("remount", operation.sdk, operation.plug))
+        raise subprocess.CalledProcessError(returncode=1, cmd=["workshop"])
+
+    result = runner.invoke(
+        create_app(fail_execution, lifecycle=recorded.lifecycle),
+        ["remount", "hotsos", "--sdk", "skills"],
+    )
+
+    assert result.exit_code == 1
+    assert result.stderr == "error: workshop remount failed\n"
+    assert recorded.events == [
+        ("status", "hotsos"),
+        ("stop", "hotsos"),
+        ("remount", "skills", "skills"),
+        ("start", "hotsos"),
+        ("status", "hotsos"),
+    ]
+
+
+def test_remount_starts_the_workshop_when_the_remount_is_interrupted(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    source = mount_source(tmp_path / "data" / "shopkeep", "Work", "skills", "skills")
+    source.mkdir(parents=True)
+    (source / "state.json").write_text("{}", encoding="utf-8")
+    recorded = RecordingLifecycle("Ready")
+
+    def interrupt(_operation: RemountOperation, _source: Path) -> None:
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        remount(
+            "hotsos",
+            ["skills"],
+            executor=interrupt,
+            lifecycle=recorded.lifecycle,
+        )
+
+    assert recorded.events == [
+        ("status", "hotsos"),
+        ("stop", "hotsos"),
+        ("start", "hotsos"),
+        ("status", "hotsos"),
+    ]
+
+
+def test_remount_command_reports_a_restart_command_failure(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    skills_source = mount_source(
+        tmp_path / "data" / "shopkeep", "Work", "skills", "skills"
+    )
+    skills_source.mkdir(parents=True)
+    (skills_source / "state.json").write_text("{}", encoding="utf-8")
+    recorded = RecordingLifecycle("Ready")
+    recorded.start_error = subprocess.CalledProcessError(1, ["workshop", "start"])
+
+    result = runner.invoke(
+        create_app(lambda _operation, _source: None, lifecycle=recorded.lifecycle),
+        ["remount", "hotsos", "--sdk", "skills"],
+    )
+
+    assert result.exit_code == 1
+    assert result.stderr == (
+        "error: workshop 'hotsos' did not restart after remounting; "
+        "run `workshop start hotsos`\n"
+    )
+
+
+def test_remount_command_reports_the_remount_failure_when_restart_also_fails(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    skills_source = mount_source(
+        tmp_path / "data" / "shopkeep", "Work", "skills", "skills"
+    )
+    skills_source.mkdir(parents=True)
+    (skills_source / "state.json").write_text("{}", encoding="utf-8")
+    recorded = RecordingLifecycle("Ready")
+    recorded.start_error = ValueError("the workshop could not be started")
+
+    def fail_execution(operation: RemountOperation, _: Path) -> None:
+        recorded.events.append(("remount", operation.sdk, operation.plug))
+        raise subprocess.CalledProcessError(1, ["workshop", "remount"])
+
+    result = runner.invoke(
+        create_app(fail_execution, lifecycle=recorded.lifecycle),
+        ["remount", "hotsos", "--sdk", "skills"],
+    )
+
+    assert result.exit_code == 1
+    assert result.stderr == "error: workshop remount failed\n"
+    assert recorded.events == [
+        ("status", "hotsos"),
+        ("stop", "hotsos"),
+        ("remount", "skills", "skills"),
+        ("start", "hotsos"),
+    ]
+
+
+def test_remount_command_fails_when_the_workshop_does_not_come_back_up(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    skills_source = mount_source(
+        tmp_path / "data" / "shopkeep", "Work", "skills", "skills"
+    )
+    skills_source.mkdir(parents=True)
+    (skills_source / "state.json").write_text("{}", encoding="utf-8")
+    recorded = RecordingLifecycle("Ready", "Stopped")
+
+    def record_execution(operation: RemountOperation, _: Path) -> None:
+        recorded.events.append(("remount", operation.sdk, operation.plug))
+
+    result = runner.invoke(
+        create_app(record_execution, lifecycle=recorded.lifecycle),
+        ["remount", "hotsos", "--sdk", "skills"],
+    )
+
+    assert result.exit_code == 1
+    assert result.stderr == (
+        "error: workshop 'hotsos' did not restart after remounting; "
+        "run `workshop start hotsos`\n"
+    )
+    assert recorded.events == [
+        ("status", "hotsos"),
+        ("stop", "hotsos"),
+        ("remount", "skills", "skills"),
+        ("start", "hotsos"),
+        ("status", "hotsos"),
+    ]
+
+
+def test_remount_command_reports_a_workshop_that_is_not_ready_after_start(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    skills_source = mount_source(
+        tmp_path / "data" / "shopkeep", "Work", "skills", "skills"
+    )
+    skills_source.mkdir(parents=True)
+    (skills_source / "state.json").write_text("{}", encoding="utf-8")
+    recorded = RecordingLifecycle("Ready", "Failed")
+
+    def record_execution(operation: RemountOperation, _: Path) -> None:
+        recorded.events.append(("remount", operation.sdk, operation.plug))
+
+    result = runner.invoke(
+        create_app(record_execution, lifecycle=recorded.lifecycle),
+        ["remount", "hotsos", "--sdk", "skills"],
+    )
+
+    assert result.exit_code == 1
+    assert result.stderr == (
+        "error: workshop 'hotsos' did not restart after remounting; "
+        "run `workshop start hotsos`\n"
+    )
+    assert recorded.events == [
+        ("status", "hotsos"),
+        ("stop", "hotsos"),
+        ("remount", "skills", "skills"),
+        ("start", "hotsos"),
+        ("status", "hotsos"),
+    ]
 
 
 def test_remount_command_remounts_a_specified_plug(tmp_path: Path, monkeypatch) -> None:
@@ -369,7 +761,7 @@ def test_remount_command_stops_when_workshop_remount_fails(
     assert not data.exists()
 
 
-def test_remount_command_executes_prior_sdk_before_rejecting_later_unknown_sdk(
+def test_remount_command_rejects_unknown_sdk_before_executing_any(
     tmp_path: Path, monkeypatch, recorded_calls: list[list[str]]
 ) -> None:
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
@@ -380,9 +772,8 @@ def test_remount_command_executes_prior_sdk_before_rejecting_later_unknown_sdk(
 
     skills = tmp_path / "data" / "shopkeep" / "mounts" / "Work" / "skills" / "skills"
     assert result.exit_code == 2
-    assert recorded_calls == [
-        ["workshop", "remount", "hotsos/skills:skills", str(skills)]
-    ]
+    assert recorded_calls == []
+    assert not skills.exists()
     assert result.stderr == (
         "error: unknown plugs for SDK 'unknown'; known SDKs: opencode, skills "
         "(or pass sdk:plug)\n"
