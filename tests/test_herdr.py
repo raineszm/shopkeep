@@ -12,9 +12,9 @@ from shopkeep.herdr import (
     herdr_disconnect,
     parse_hostname,
     render_herdr_config,
-    run_workshop_exec,
     seed_herdr_config,
 )
+from shopkeep.project_sdk import ConfigMount, HERDR_CONFIG_MOUNT
 
 
 runner = CliRunner()
@@ -66,67 +66,40 @@ def test_render_herdr_config_starts_login_shells_in_the_project() -> None:
     )
 
 
-def test_run_workshop_exec_writes_the_config_through_bash(monkeypatch) -> None:
-    calls: list[tuple[list[str], dict[str, object]]] = []
+def test_seed_herdr_config_writes_the_rendered_config_through_the_herdr_mount() -> None:
+    calls: list[tuple[str, ConfigMount, str]] = []
 
-    def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess:
-        calls.append((args, kwargs))
-        return subprocess.CompletedProcess(args, 0)
+    def record(workshop: str, mount: ConfigMount, content: str) -> None:
+        calls.append((workshop, mount, content))
 
-    monkeypatch.setattr("shopkeep.workshop.subprocess.run", fake_run)
-
-    run_workshop_exec("dev", "[terminal]\n")
-
-    assert calls == [
-        (
-            [
-                "workshop",
-                "exec",
-                "--non-interactive",
-                "--uid",
-                "1000",
-                "--gid",
-                "1000",
-                "dev",
-                "--",
-                "bash",
-                "-c",
-                "mkdir -p ~/.config/herdr && cat > ~/.config/herdr/config.toml",
-            ],
-            {"input": "[terminal]\n", "text": True, "check": True},
-        )
-    ]
-
-
-def test_seed_herdr_config_writes_the_rendered_config() -> None:
-    calls: list[tuple[str, str]] = []
-
-    def record(workshop: str, config: str) -> None:
-        calls.append((workshop, config))
-
-    seed_herdr_config("dev", runner=record)
+    seed_herdr_config("dev", writer=record)
 
     assert calls == [
         (
             "dev",
+            HERDR_CONFIG_MOUNT,
             '[terminal]\nshell_mode = "login"\nnew_cwd = "/project"\n',
         )
     ]
 
 
 def test_seeding_twice_leaves_the_same_content() -> None:
-    config: dict[str, str] = {}
+    writes: list[tuple[str, ConfigMount, str]] = []
 
-    def write(workshop: str, content: str) -> None:
-        config["content"] = content
+    def write(workshop: str, mount: ConfigMount, content: str) -> None:
+        writes.append((workshop, mount, content))
 
-    seed_herdr_config("dev", runner=write)
-    first_write = dict(config)
-    seed_herdr_config("dev", runner=write)
+    seed_herdr_config("dev", writer=write)
+    first_write = list(writes)
+    seed_herdr_config("dev", writer=write)
 
-    expected = '[terminal]\nshell_mode = "login"\nnew_cwd = "/project"\n'
-    assert first_write == {"content": expected}
-    assert config == first_write
+    expected = (
+        "dev",
+        HERDR_CONFIG_MOUNT,
+        '[terminal]\nshell_mode = "login"\nnew_cwd = "/project"\n',
+    )
+    assert first_write == [expected]
+    assert writes == [expected, expected]
 
 
 def test_parse_hostname_returns_none_when_the_line_is_missing() -> None:

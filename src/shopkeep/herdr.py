@@ -4,9 +4,7 @@ import shutil
 import subprocess
 from collections.abc import Callable
 
-from .workshop import write_workshop_file
-
-HERDR_CONFIG_PATH = "~/.config/herdr/config.toml"
+from .project_sdk import ConfigWriter, HERDR_CONFIG_MOUNT, write_config
 
 
 class HerdrConfigSeedFailed(RuntimeError):
@@ -22,15 +20,11 @@ def render_herdr_config() -> str:
     return '[terminal]\nshell_mode = "login"\nnew_cwd = "/project"\n'
 
 
-def run_workshop_exec(workshop: str, config: str) -> None:
-    write_workshop_file(workshop, config, HERDR_CONFIG_PATH)
-
-
 def seed_herdr_config(
     workshop: str,
-    runner: Callable[[str, str], None] = run_workshop_exec,
+    writer: ConfigWriter = write_config,
 ) -> None:
-    runner(workshop, render_herdr_config())
+    writer(workshop, HERDR_CONFIG_MOUNT, render_herdr_config())
 
 
 def run_workshop_info(workshop: str) -> str:

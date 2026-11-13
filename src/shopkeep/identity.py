@@ -5,9 +5,7 @@ import json
 import re
 import subprocess
 
-from .workshop import write_workshop_file
-
-GIT_CONFIG_PATH = "~/.config/git/config"
+from .project_sdk import ConfigWriter, GIT_CONFIG_MOUNT, write_config
 
 
 @dataclass(frozen=True)
@@ -77,13 +75,9 @@ def git_config_value(value: str) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
-def run_workshop_exec(workshop: str, config: str) -> None:
-    write_workshop_file(workshop, config, GIT_CONFIG_PATH)
-
-
 def seed_git_identity(
     workshop: str,
     identity: GitIdentity,
-    runner: Callable[[str, str], None] = run_workshop_exec,
+    writer: ConfigWriter = write_config,
 ) -> None:
-    runner(workshop, render_git_config(identity))
+    writer(workshop, GIT_CONFIG_MOUNT, render_git_config(identity))

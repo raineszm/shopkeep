@@ -1,5 +1,4 @@
 from pathlib import Path
-import subprocess
 
 import pytest
 
@@ -8,9 +7,9 @@ from shopkeep.identity import (
     read_git_config_value,
     render_git_config,
     resolve_git_identity,
-    run_workshop_exec,
     seed_git_identity,
 )
+from shopkeep.project_sdk import ConfigMount, GIT_CONFIG_MOUNT
 
 
 def test_read_git_config_value_reports_missing_git(monkeypatch) -> None:
@@ -86,19 +85,20 @@ def test_render_git_config_includes_identity_and_disables_signing() -> None:
     )
 
 
-def test_seed_git_identity_writes_the_rendered_config() -> None:
-    calls: list[tuple[str, str]] = []
+def test_seed_git_identity_writes_the_rendered_config_through_the_git_mount() -> None:
+    calls: list[tuple[str, ConfigMount, str]] = []
 
-    def record(workshop: str, config: str) -> None:
-        calls.append((workshop, config))
+    def record(workshop: str, mount: ConfigMount, content: str) -> None:
+        calls.append((workshop, mount, content))
 
     seed_git_identity(
-        "dev", GitIdentity("Host User", "host@example.com"), runner=record
+        "dev", GitIdentity("Host User", "host@example.com"), writer=record
     )
 
     assert calls == [
         (
             "dev",
+            GIT_CONFIG_MOUNT,
             "[user]\n"
             "\tname = Host User\n"
             "\temail = host@example.com\n"
@@ -106,37 +106,5 @@ def test_seed_git_identity_writes_the_rendered_config() -> None:
             "\tgpgsign = false\n"
             "[tag]\n"
             "\tgpgsign = false\n",
-        )
-    ]
-
-
-def test_run_workshop_exec_writes_the_config_through_bash(monkeypatch) -> None:
-    calls: list[tuple[list[str], dict[str, object]]] = []
-
-    def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess:
-        calls.append((args, kwargs))
-        return subprocess.CompletedProcess(args, 0)
-
-    monkeypatch.setattr("shopkeep.workshop.subprocess.run", fake_run)
-
-    run_workshop_exec("dev", "[user]\n")
-
-    assert calls == [
-        (
-            [
-                "workshop",
-                "exec",
-                "--non-interactive",
-                "--uid",
-                "1000",
-                "--gid",
-                "1000",
-                "dev",
-                "--",
-                "bash",
-                "-c",
-                "mkdir -p ~/.config/git && cat > ~/.config/git/config",
-            ],
-            {"input": "[user]\n", "text": True, "check": True},
         )
     ]

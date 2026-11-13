@@ -19,6 +19,11 @@ remounting it.
 A named mount point declared by an SDK. `workshop remount` repoints the plug at
 a host directory.
 
+**Config mount**
+A Shopkeep-owned file delivered through a `project-shopkeep` plug. It names the
+plug, the mount directory, and the filename, so the plug's workshop target and
+the in-workshop write path are one fact.
+
 **`project-shopkeep`**
 The local, ignored in-project SDK Shopkeep generates at
 `.workshop/shopkeep/sdk.yaml`. It provides the mount plugs that carry the
